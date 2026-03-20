@@ -1,0 +1,9 @@
+{
+  "name": "nrfi-lambda",
+  "version": "1.0.0",
+  "description": "Lambda function for NRFI outcome storage",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3",
+    "@aws-sdk/lib-dynamodb": "^3"
+  }
+}

@@ -139,6 +139,64 @@ const getWindInfo = (weather) => {
   return               { label: `${Math.round(windSpeed)}mph CROSS`, color: "#4a6080" };
 };
 
+// ── Outcomes API (DynamoDB via Lambda) ───────────────────────────────────────
+const OUTCOMES_API = "https://q0jutr0ldh.execute-api.us-east-1.amazonaws.com";
+
+const saveOutcome = async (game, predictedScore, predictedGrade, season) => {
+  try {
+    await fetch(`${OUTCOMES_API}/outcomes/${game.gamePk}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        season,
+        date: game.gameIso?.slice(0, 10),
+        homeTeam: game.homeTeam,
+        awayTeam: game.awayTeam,
+        venue: game.venue,
+        homePitcher: game.homePitcher,
+        awayPitcher: game.awayPitcher,
+        homeERA: game.homeERA,
+        awayERA: game.awayERA,
+        homeWHIP: game.homeWHIP,
+        awayWHIP: game.awayWHIP,
+        parkFactor: getPF(game.venue),
+        weatherDelta: calcWeatherDelta(game.weather),
+        predictedScore,
+        predictedGrade,
+      }),
+    });
+  } catch { /* non-critical, never block the UI */ }
+};
+
+const recordResult = async (gamePk, firstInning, predictedScore, predictedGrade, season, gameData) => {
+  if (!firstInning || gamePk == null) return;
+  try {
+    await fetch(`${OUTCOMES_API}/outcomes/${gamePk}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        season,
+        date: gameData.gameIso?.slice(0, 10),
+        homeTeam: gameData.homeTeam,
+        awayTeam: gameData.awayTeam,
+        venue: gameData.venue,
+        homePitcher: gameData.homePitcher,
+        awayPitcher: gameData.awayPitcher,
+        homeERA: gameData.homeERA,
+        awayERA: gameData.awayERA,
+        homeWHIP: gameData.homeWHIP,
+        awayWHIP: gameData.awayWHIP,
+        parkFactor: getPF(gameData.venue),
+        weatherDelta: calcWeatherDelta(gameData.weather),
+        predictedScore,
+        predictedGrade,
+        actualNRFI: firstInning.nrfi,
+        totalRuns: firstInning.totalRuns,
+      }),
+    });
+  } catch { /* non-critical */ }
+};
+
 // ── MLB Stats API ─────────────────────────────────────────────────────────────
 const MLB_API = "https://statsapi.mlb.com/api/v1";
 
@@ -396,6 +454,22 @@ export default function App() {
 
       setGames(enriched);
       setFetched(true);
+
+      // ── Step 4: Persist to DynamoDB (fire-and-forget) ─────────────────────
+      enriched.forEach((g) => {
+        const pf = getPF(g.venue);
+        const wd = calcWeatherDelta(g.weather);
+        const { g: grade, s: score } = nrfiGrade({
+          homeERA: g.homeERA, awayERA: g.awayERA,
+          homeWHIP: g.homeWHIP, awayWHIP: g.awayWHIP,
+          pf, weatherDelta: wd,
+        });
+        if (g.firstInning) {
+          recordResult(g.gamePk, g.firstInning, score, grade, season, g);
+        } else {
+          saveOutcome(g, score, grade, season);
+        }
+      });
     } catch (e) {
       setError(e.message);
     } finally {
