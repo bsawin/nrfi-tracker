@@ -67,6 +67,20 @@ cd lambda && npm install && zip -r ../function.zip index.js node_modules
 aws lambda update-function-code --function-name nrfi-outcomes --zip-file fileb://../function.zip --region us-east-1
 ```
 
+## Scheduled Poller (nrfi-poller Lambda)
+Runs every 20 minutes via EventBridge. Checks today's MLB schedule for Live/Final games, fetches each linescore, and writes first-inning results to DynamoDB using `UpdateItem` (preserves existing prediction data).
+
+- **Lambda:** `nrfi-poller` (source: `lambda-poller/index.js`, 60s timeout)
+- **EventBridge rule:** `nrfi-poll-20min` — `rate(20 minutes)`, always enabled
+- **Game hours guard:** Lambda exits immediately if ET hour is between 1 AM and 1 PM
+- **Idempotent:** `resultRecordedAt` uses `if_not_exists` so re-runs don't overwrite the first recorded timestamp
+
+**To redeploy poller:**
+```bash
+cd lambda-poller && npm install && zip -qr function.zip index.js node_modules
+aws lambda update-function-code --function-name nrfi-poller --zip-file fileb://function.zip --region us-east-1
+```
+
 ## Deploy Command
 ```bash
 npm run build

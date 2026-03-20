@@ -1,0 +1,9 @@
+{
+  "name": "nrfi-poller",
+  "version": "1.0.0",
+  "description": "Scheduled Lambda — polls MLB linescore and writes first-inning results to DynamoDB",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3",
+    "@aws-sdk/lib-dynamodb": "^3"
+  }
+}
