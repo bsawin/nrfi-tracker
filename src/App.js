@@ -13,16 +13,130 @@ const getPF = (venue = "") => {
     if (venue.toLowerCase().includes(k.toLowerCase())) return f;
   return 1.0;
 };
-const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, pf }) => {
+const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, pf, weatherDelta = 0 }) => {
   let s = 100;
   s -= Math.max(0, (((homeERA ?? 4) + (awayERA ?? 4)) / 2 - 3.0) * 12);
   s -= Math.max(0, (((homeWHIP ?? 1.3) + (awayWHIP ?? 1.3)) / 2 - 1.0) * 20);
   s -= (pf - 1.0) * 60;
+  s += weatherDelta;
   s = Math.round(Math.max(0, Math.min(100, s)));
   return s >= 72 ? { g:"A", c:"#00e5a0", l:"Strong NRFI", s } :
          s >= 55 ? { g:"B", c:"#f5c842", l:"Lean NRFI",   s } :
          s >= 40 ? { g:"C", c:"#ff9f43", l:"Toss-Up",     s } :
                    { g:"D", c:"#ff4d6d", l:"Risky NRFI",  s };
+};
+
+// ── Stadium Data ──────────────────────────────────────────────────────────────
+// cfBearing: compass degrees from home plate to CF (0=N, 90=E, 180=S, 270=W)
+// indoor: true = dome/retractable usually closed → wind not a factor
+const STADIUM_DATA = [
+  // Most-specific patterns first to avoid substring collisions
+  ["Great American",   { lat: 39.0979, lon: -84.5082,  cfBearing: 18,  indoor: false }], // Cincinnati
+  ["American Family",  { lat: 43.0280, lon: -87.9712,  cfBearing: 25,  indoor: false }], // Milwaukee (retractable, usually open)
+  ["Globe Life",       { lat: 32.7473, lon: -97.0836,  cfBearing: 35,  indoor: true  }], // Arlington (retractable, usually closed)
+  ["loanDepot",        { lat: 25.7781, lon: -80.2197,  cfBearing: 355, indoor: false }], // Miami (retractable)
+  ["Citizens Bank",    { lat: 39.9061, lon: -75.1665,  cfBearing: 350, indoor: false }], // Philadelphia
+  ["Minute Maid",      { lat: 29.7573, lon: -95.3555,  cfBearing: 18,  indoor: false }], // Houston (retractable)
+  ["Guaranteed Rate",  { lat: 41.8300, lon: -87.6339,  cfBearing: 355, indoor: false }], // Chicago (Sox)
+  ["Tropicana",        { lat: 27.7682, lon: -82.6534,  cfBearing: 0,   indoor: true  }], // Tampa (dome)
+  ["Rogers Centre",    { lat: 43.6414, lon: -79.3894,  cfBearing: 20,  indoor: true  }], // Toronto (dome)
+  ["Target Field",     { lat: 44.9817, lon: -93.2781,  cfBearing: 355, indoor: false }], // Minneapolis
+  ["Angel Stadium",    { lat: 33.8003, lon: -117.8827, cfBearing: 335, indoor: false }], // Anaheim
+  ["Sutter Health",    { lat: 38.5805, lon: -121.5001, cfBearing: 15,  indoor: false }], // Sacramento (A's)
+  ["T-Mobile Park",    { lat: 47.5914, lon: -122.3325, cfBearing: 335, indoor: false }], // Seattle (retractable, usually open)
+  ["Yankee Stadium",   { lat: 40.8296, lon: -73.9262,  cfBearing: 33,  indoor: false }], // New York (AL)
+  ["Fenway Park",      { lat: 42.3467, lon: -71.0972,  cfBearing: 5,   indoor: false }], // Boston
+  ["Oriole Park",      { lat: 39.2838, lon: -76.6218,  cfBearing: 50,  indoor: false }], // Baltimore
+  ["Progressive Field",{ lat: 41.4962, lon: -81.6852,  cfBearing: 22,  indoor: false }], // Cleveland
+  ["Comerica Park",    { lat: 42.3390, lon: -83.0485,  cfBearing: 330, indoor: false }], // Detroit
+  ["Kauffman Stadium", { lat: 39.0517, lon: -94.4803,  cfBearing: 5,   indoor: false }], // Kansas City
+  ["Truist Park",      { lat: 33.8908, lon: -84.4678,  cfBearing: 12,  indoor: false }], // Atlanta
+  ["Citi Field",       { lat: 40.7571, lon: -73.8458,  cfBearing: 350, indoor: false }], // New York (NL)
+  ["Nationals Park",   { lat: 38.8730, lon: -77.0074,  cfBearing: 30,  indoor: false }], // Washington
+  ["Wrigley Field",    { lat: 41.9484, lon: -87.6553,  cfBearing: 68,  indoor: false }], // Chicago (NL) — ENE, famous wind
+  ["PNC Park",         { lat: 40.4469, lon: -80.0057,  cfBearing: 14,  indoor: false }], // Pittsburgh
+  ["Busch Stadium",    { lat: 38.6226, lon: -90.1928,  cfBearing: 5,   indoor: false }], // St. Louis
+  ["Chase Field",      { lat: 33.4455, lon: -112.0667, cfBearing: 350, indoor: true  }], // Phoenix (retractable, usually closed)
+  ["Coors Field",      { lat: 39.7559, lon: -104.9942, cfBearing: 17,  indoor: false }], // Denver
+  ["Dodger Stadium",   { lat: 34.0739, lon: -118.2400, cfBearing: 335, indoor: false }], // Los Angeles
+  ["Petco Park",       { lat: 32.7073, lon: -117.1573, cfBearing: 35,  indoor: false }], // San Diego
+  ["Oracle Park",      { lat: 37.7786, lon: -122.3893, cfBearing: 100, indoor: false }], // San Francisco (CF toward the Bay)
+];
+
+const getStadium = (venueName = "") => {
+  const lower = venueName.toLowerCase();
+  const found = STADIUM_DATA.find(([k]) => lower.includes(k.toLowerCase()));
+  return found ? found[1] : null;
+};
+
+// ── Weather ───────────────────────────────────────────────────────────────────
+const fetchWeather = async (lat, lon, dateStr, gameIso) => {
+  try {
+    const next = new Date(dateStr + "T00:00:00Z");
+    next.setDate(next.getDate() + 1);
+    const nextStr = next.toISOString().slice(0, 10);
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+      `&hourly=temperature_2m,wind_speed_10m,wind_direction_10m,precipitation_probability` +
+      `&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=UTC` +
+      `&start_date=${dateStr}&end_date=${nextStr}`;
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d.hourly?.time?.length) return null;
+    // Find hour index closest to game time
+    const gameMs = new Date(gameIso).getTime();
+    let idx = 0, minDiff = Infinity;
+    d.hourly.time.forEach((t, i) => {
+      const diff = Math.abs(new Date(t + ":00Z").getTime() - gameMs);
+      if (diff < minDiff) { minDiff = diff; idx = i; }
+    });
+    return {
+      tempF:     d.hourly.temperature_2m[idx],
+      windSpeed: d.hourly.wind_speed_10m[idx],
+      windDir:   d.hourly.wind_direction_10m[idx],
+      precipPct: d.hourly.precipitation_probability[idx],
+    };
+  } catch {
+    return null;
+  }
+};
+
+// Returns -1 (blowing in) to +1 (blowing out)
+const windAlignment = (windDir, cfBearing) => {
+  const outSource = (cfBearing + 180) % 360;
+  const diff = ((windDir - outSource + 540) % 360) - 180;
+  return Math.cos(diff * Math.PI / 180);
+};
+
+const calcWeatherDelta = (weather) => {
+  if (!weather) return 0;
+  const { tempF, windSpeed, windDir, cfBearing, isIndoor } = weather;
+  if (isIndoor) return 0;
+  let delta = 0;
+  // Cold = denser air = less carry = good for NRFI; heat = slight disadvantage
+  if (tempF != null) {
+    if      (tempF < 40) delta += 10;
+    else if (tempF < 50) delta += 6;
+    else if (tempF < 55) delta += 3;
+    else if (tempF > 90) delta -= 4;
+    else if (tempF > 82) delta -= 2;
+  }
+  // Wind: blowing out hurts NRFI, blowing in helps
+  if (windSpeed != null && windDir != null && cfBearing != null && windSpeed >= 8) {
+    const align = windAlignment(windDir, cfBearing);
+    delta += Math.round(-align * (windSpeed - 7) * 0.5);
+  }
+  return Math.round(delta);
+};
+
+const getWindInfo = (weather) => {
+  if (!weather || weather.isIndoor) return null;
+  const { windSpeed, windDir, cfBearing } = weather;
+  if (!windSpeed || windSpeed < 8 || windDir == null || cfBearing == null) return null;
+  const align = windAlignment(windDir, cfBearing);
+  if (align >  0.4) return { label: `${Math.round(windSpeed)}mph OUT`,   color: "#ff4d6d" };
+  if (align < -0.4) return { label: `${Math.round(windSpeed)}mph IN`,    color: "#00e5a0" };
+  return               { label: `${Math.round(windSpeed)}mph CROSS`, color: "#4a6080" };
 };
 
 // ── MLB Stats API ─────────────────────────────────────────────────────────────
@@ -92,12 +206,26 @@ const PRow = ({ side, name, era, whip, team }) => {
   );
 };
 
+const Chip = ({ label, color }) => (
+  <div style={{fontFamily:"'Space Mono',monospace",fontSize:10,letterSpacing:1,padding:"3px 10px",borderRadius:20,background:`${color}15`,color,border:`1px solid ${color}35`}}>
+    {label}
+  </div>
+);
+
 const Card = ({ game, idx }) => {
   const pf = getPF(game.venue);
-  const nr = nrfiGrade({ homeERA:game.homeERA, awayERA:game.awayERA, homeWHIP:game.homeWHIP, awayWHIP:game.awayWHIP, pf });
+  const weatherDelta = calcWeatherDelta(game.weather);
+  const nr = nrfiGrade({ homeERA:game.homeERA, awayERA:game.awayERA, homeWHIP:game.homeWHIP, awayWHIP:game.awayWHIP, pf, weatherDelta });
   const avgERA = game.homeERA != null && game.awayERA != null ? ((game.homeERA + game.awayERA) / 2).toFixed(2) : null;
   const pfPct = ((pf - 1) * 100).toFixed(0);
   const pfc = pf > 1.05 ? "#ff4d6d" : pf < 0.97 ? "#00e5a0" : "#4a6080";
+
+  const wx = game.weather;
+  const windInfo = getWindInfo(wx);
+  const tempColor = wx && !wx.isIndoor && wx.tempF != null
+    ? (wx.tempF < 50 ? "#4a9eff" : wx.tempF > 85 ? "#ff9f43" : "#4a6080")
+    : "#4a6080";
+
   return (
     <div
       style={{background:"linear-gradient(145deg,#0d1f30,#0a1520)",border:"1px solid #1a2e42",borderTop:`3px solid ${nr.c}`,borderRadius:12,padding:"20px 22px",position:"relative",overflow:"hidden",animation:`fadeUp .4s ease ${idx * .06}s both`,transition:"transform .2s,box-shadow .2s"}}
@@ -121,15 +249,24 @@ const Card = ({ game, idx }) => {
           <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",marginTop:2}}>{nr.s}/100</span>
         </div>
       </div>
+
       <div style={{marginBottom:14}}>
         <PRow side="AWAY" name={game.awayPitcher} era={game.awayERA} whip={game.awayWHIP} team={game.awayTeam}/>
         <PRow side="HOME" name={game.homePitcher} era={game.homeERA} whip={game.homeWHIP} team={game.homeTeam}/>
       </div>
+
+      {/* Chips row */}
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-        <div style={{fontFamily:"'Space Mono',monospace",fontSize:10,letterSpacing:1,padding:"3px 10px",borderRadius:20,background:`${pfc}15`,color:pfc,border:`1px solid ${pfc}35`}}>
-          PARK {pf > 1 ? "+" : ""}{pfPct}%
-        </div>
-        {avgERA && <div style={{fontFamily:"'Space Mono',monospace",fontSize:10,padding:"3px 10px",borderRadius:20,background:"#ffffff08",color:"#4a6080",border:"1px solid #1a2e42"}}>AVG ERA {avgERA}</div>}
+        <Chip label={`PARK ${pf > 1 ? "+" : ""}${pfPct}%`} color={pfc}/>
+        {avgERA && <Chip label={`AVG ERA ${avgERA}`} color="#4a6080"/>}
+
+        {/* Weather chips */}
+        {wx?.isIndoor && <Chip label="DOME" color="#4a6080"/>}
+        {wx && !wx.isIndoor && wx.tempF != null &&
+          <Chip label={`${Math.round(wx.tempF)}°F`} color={tempColor}/>}
+        {windInfo && <Chip label={windInfo.label} color={windInfo.color}/>}
+        {wx && !wx.isIndoor && wx.precipPct != null && wx.precipPct >= 40 &&
+          <Chip label={`${wx.precipPct}% RAIN`} color="#f5c842"/>}
       </div>
     </div>
   );
@@ -159,9 +296,9 @@ export default function App() {
         setGames([]); setFetched(true); setLoading(false); setStatus(""); return;
       }
 
-      // ── Step 2: Extract games & collect pitcher IDs ───────────────────────
       const gameList = rawGames.map((g, i) => ({
         id: g.gamePk ?? i,
+        gameIso: g.gameDate,
         gameTime: formatGameTime(g.gameDate),
         venue: g.venue?.name ?? "",
         awayTeam: g.teams?.away?.team?.teamName ?? g.teams?.away?.team?.name ?? "Away",
@@ -172,24 +309,32 @@ export default function App() {
         homePitcherId: g.teams?.home?.probablePitcher?.id ?? null,
       }));
 
-      // ── Step 3: Fetch pitcher stats in parallel ───────────────────────────
-      setStatus("FETCHING PITCHER STATS...");
+      // ── Step 2: Fetch pitcher stats + weather in parallel ─────────────────
+      setStatus("FETCHING STATS & WEATHER...");
       const pitcherIds = [...new Set(
         gameList.flatMap(g => [g.awayPitcherId, g.homePitcherId]).filter(Boolean)
       )];
 
-      const statsEntries = await Promise.all(
-        pitcherIds.map(async (id) => [id, await fetchPitcherStats(id, season)])
-      );
+      const [statsEntries, weatherResults] = await Promise.all([
+        Promise.all(pitcherIds.map(async (id) => [id, await fetchPitcherStats(id, season)])),
+        Promise.all(gameList.map(async (g) => {
+          const stadium = getStadium(g.venue);
+          if (!stadium) return null;
+          const wx = await fetchWeather(stadium.lat, stadium.lon, d, g.gameIso);
+          return wx ? { ...wx, cfBearing: stadium.cfBearing, isIndoor: stadium.indoor } : null;
+        })),
+      ]);
+
       const statsMap = Object.fromEntries(statsEntries);
 
-      // ── Step 4: Merge stats into games ────────────────────────────────────
-      const enriched = gameList.map(g => ({
+      // ── Step 3: Merge ─────────────────────────────────────────────────────
+      const enriched = gameList.map((g, i) => ({
         ...g,
         awayERA:  statsMap[g.awayPitcherId]?.era  ?? null,
         awayWHIP: statsMap[g.awayPitcherId]?.whip ?? null,
         homeERA:  statsMap[g.homePitcherId]?.era  ?? null,
         homeWHIP: statsMap[g.homePitcherId]?.whip ?? null,
+        weather: weatherResults[i],
       }));
 
       setGames(enriched);
@@ -201,13 +346,17 @@ export default function App() {
     }
   }, []);
 
-  const sorted = [...games].sort((a, b) => {
-    if (sortBy !== "grade") return 0;
-    const sc = g => nrfiGrade({homeERA:g.homeERA,awayERA:g.awayERA,homeWHIP:g.homeWHIP,awayWHIP:g.awayWHIP,pf:getPF(g.venue)}).s;
-    return sc(b) - sc(a);
-  });
+  const gradeOf = (g) => {
+    const pf = getPF(g.venue);
+    const weatherDelta = calcWeatherDelta(g.weather);
+    return nrfiGrade({ homeERA:g.homeERA, awayERA:g.awayERA, homeWHIP:g.homeWHIP, awayWHIP:g.awayWHIP, pf, weatherDelta });
+  };
+
+  const sorted = [...games].sort((a, b) =>
+    sortBy === "grade" ? gradeOf(b).s - gradeOf(a).s : 0
+  );
   const counts = games.reduce((acc, g) => {
-    const { g: gr } = nrfiGrade({homeERA:g.homeERA,awayERA:g.awayERA,homeWHIP:g.homeWHIP,awayWHIP:g.awayWHIP,pf:getPF(g.venue)});
+    const { g: gr } = gradeOf(g);
     acc[gr] = (acc[gr] || 0) + 1; return acc;
   }, {});
 
@@ -315,7 +464,7 @@ export default function App() {
       </div>
 
       <div style={{textAlign:"center",marginTop:48,fontFamily:"'Space Mono',monospace",fontSize:10,color:"#1a2e42",letterSpacing:2}}>
-        DATA VIA MLB STATS API · FOR ENTERTAINMENT PURPOSES ONLY
+        DATA VIA MLB STATS API + OPEN-METEO · FOR ENTERTAINMENT PURPOSES ONLY
       </div>
     </div>
   );
