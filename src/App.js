@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 
 // ── Scoring ───────────────────────────────────────────────────────────────────
 const PARK_FACTORS = {
@@ -197,6 +197,159 @@ const recordResult = async (gamePk, firstInning, predictedScore, predictedGrade,
   } catch { /* non-critical */ }
 };
 
+// ── Chat ──────────────────────────────────────────────────────────────────────
+const CHAT_WS = "wss://q56kgtnct0.execute-api.us-east-1.amazonaws.com/production";
+
+const getUserUuid = () => {
+  let id = localStorage.getItem("nrfi-uuid");
+  if (!id) { id = crypto.randomUUID(); localStorage.setItem("nrfi-uuid", id); }
+  return id;
+};
+
+const fmtTime = (iso) => {
+  try {
+    return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  } catch { return ""; }
+};
+
+const NicknamePrompt = ({ onSave }) => {
+  const [val, setVal] = useState("");
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+      <div style={{background:"#0d1f30",border:"1px solid #1a2e42",borderRadius:14,padding:"32px 28px",width:320,textAlign:"center"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,letterSpacing:3,color:"#e0eaf4",marginBottom:6}}>CHOOSE A NICKNAME</div>
+        <div style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#4a6080",letterSpacing:1,marginBottom:20}}>SHOWN IN THE CHAT · MAX 20 CHARS</div>
+        <input
+          autoFocus maxLength={20} value={val} onChange={e => setVal(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && val.trim() && onSave(val.trim())}
+          placeholder="e.g. NRFIKing99"
+          style={{width:"100%",background:"#060f18",border:"1px solid #1a2e42",borderRadius:8,padding:"10px 14px",color:"#c8d8e8",fontFamily:"'Space Mono',monospace",fontSize:12,outline:"none",boxSizing:"border-box",marginBottom:14}}
+        />
+        <button
+          onClick={() => val.trim() && onSave(val.trim())}
+          style={{width:"100%",padding:"10px",background:"linear-gradient(135deg,#00e5a0,#00bfff)",border:"none",borderRadius:8,color:"#060f18",fontFamily:"'Space Mono',monospace",fontSize:12,fontWeight:700,letterSpacing:1,cursor:"pointer"}}
+        >LET'S GO</button>
+      </div>
+    </div>
+  );
+};
+
+const ChatPanel = ({ date, nickname, onChangeNickname }) => {
+  const [messages, setMessages]   = useState([]);
+  const [input,    setInput]      = useState("");
+  const [status,   setStatus]     = useState("connecting"); // connecting | open | closed
+  const wsRef      = useRef(null);
+  const bottomRef  = useRef(null);
+  const uuid       = getUserUuid();
+
+  useEffect(() => {
+    if (!date) return;
+    setMessages([]);
+    setStatus("connecting");
+
+    const ws = new WebSocket(`${CHAT_WS}?date=${date}`);
+    wsRef.current = ws;
+
+    ws.onopen    = () => setStatus("open");
+    ws.onclose   = () => setStatus("closed");
+    ws.onerror   = () => setStatus("closed");
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.type === "history")  setMessages(data.messages ?? []);
+        if (data.type === "message")  setMessages(prev => [...prev, data]);
+      } catch {}
+    };
+
+    return () => ws.close();
+  }, [date]);
+
+  // Scroll to bottom whenever messages change
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const send = () => {
+    if (!input.trim() || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({
+      action: "sendMessage", date, message: input.trim(), nickname, userUuid: uuid,
+    }));
+    setInput("");
+  };
+
+  const statusColor = status === "open" ? "#00e5a0" : status === "connecting" ? "#f5c842" : "#ff4d6d";
+  const statusLabel = status === "open" ? "LIVE" : status === "connecting" ? "CONNECTING..." : "DISCONNECTED";
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",height:"100%",background:"linear-gradient(145deg,#0d1f30,#0a1520)",border:"1px solid #1a2e42",borderRadius:12,overflow:"hidden"}}>
+
+      {/* Header */}
+      <div style={{padding:"12px 16px",borderBottom:"1px solid #0e1822",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+        <div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:2,color:"#e0eaf4"}}>GAME DAY CHAT</div>
+          <div style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",letterSpacing:1,marginTop:1}}>{date}</div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <div style={{width:6,height:6,borderRadius:"50%",background:statusColor,boxShadow:`0 0 6px ${statusColor}`}}/>
+          <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:statusColor,letterSpacing:1}}>{statusLabel}</span>
+        </div>
+      </div>
+
+      {/* Messages */}
+      <div style={{flex:1,overflowY:"auto",padding:"12px 14px",display:"flex",flexDirection:"column",gap:10}}>
+        {messages.length === 0 && status === "open" && (
+          <div style={{textAlign:"center",padding:"30px 0",fontFamily:"'Space Mono',monospace",fontSize:10,color:"#2a4060",letterSpacing:1}}>
+            NO MESSAGES YET.<br/>BE THE FIRST TO CHAT!
+          </div>
+        )}
+        {messages.map((m) => {
+          const isMe = m.userUuid === uuid;
+          return (
+            <div key={m.messageId} style={{display:"flex",flexDirection:"column",alignItems:isMe?"flex-end":"flex-start"}}>
+              <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:3,flexDirection:isMe?"row-reverse":"row"}}>
+                <span style={{fontFamily:"'Space Mono',monospace",fontSize:9,fontWeight:700,color:isMe?"#00bfff":"#00e5a0",letterSpacing:.5}}>
+                  {isMe ? "YOU" : m.nickname}
+                </span>
+                <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#2a4060"}}>{fmtTime(m.sentAt)}</span>
+              </div>
+              <div style={{maxWidth:"85%",padding:"7px 10px",borderRadius:isMe?"10px 2px 10px 10px":"2px 10px 10px 10px",background:isMe?"#003d5c":"#0e1f30",border:`1px solid ${isMe?"#00bfff20":"#1a2e42"}`,fontFamily:"'DM Sans',sans-serif",fontSize:12,color:"#c8d8e8",lineHeight:1.45,wordBreak:"break-word"}}>
+                {m.message}
+              </div>
+            </div>
+          );
+        })}
+        <div ref={bottomRef}/>
+      </div>
+
+      {/* Nickname bar */}
+      <div style={{padding:"6px 14px",borderTop:"1px solid #0e1822",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+        <span style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#4a6080"}}>
+          CHATTING AS <span style={{color:"#00e5a0"}}>{nickname}</span>
+        </span>
+        <button onClick={onChangeNickname} style={{background:"none",border:"none",color:"#4a6080",fontFamily:"'Space Mono',monospace",fontSize:9,cursor:"pointer",letterSpacing:.5,textDecoration:"underline"}}>
+          CHANGE
+        </button>
+      </div>
+
+      {/* Input */}
+      <div style={{padding:"10px 12px",borderTop:"1px solid #0e1822",display:"flex",gap:8,flexShrink:0}}>
+        <input
+          value={input} onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && send()}
+          maxLength={500}
+          placeholder={status === "open" ? "Type a message..." : "Connecting..."}
+          disabled={status !== "open"}
+          style={{flex:1,background:"#060f18",border:"1px solid #1a2e42",borderRadius:8,padding:"8px 12px",color:"#c8d8e8",fontFamily:"'DM Sans',sans-serif",fontSize:12,outline:"none",opacity:status==="open"?1:.5}}
+        />
+        <button
+          onClick={send} disabled={status !== "open" || !input.trim()}
+          style={{padding:"8px 14px",background:status==="open"&&input.trim()?"linear-gradient(135deg,#00e5a0,#00bfff)":"#0d1f30",border:"none",borderRadius:8,color:status==="open"&&input.trim()?"#060f18":"#2a4060",fontFamily:"'Space Mono',monospace",fontSize:10,fontWeight:700,cursor:status==="open"&&input.trim()?"pointer":"not-allowed",transition:"all .2s",letterSpacing:1}}
+        >SEND</button>
+      </div>
+    </div>
+  );
+};
+
 // ── MLB Stats API ─────────────────────────────────────────────────────────────
 const MLB_API = "https://statsapi.mlb.com/api/v1";
 
@@ -382,13 +535,17 @@ const Card = ({ game, idx }) => {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [games,   setGames]   = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [status,  setStatus]  = useState("");
-  const [error,   setError]   = useState(null);
-  const [date,    setDate]    = useState("2026-03-26");
-  const [sortBy,  setSortBy]  = useState("grade");
-  const [fetched, setFetched] = useState(false);
+  const [games,    setGames]    = useState([]);
+  const [loading,  setLoading]  = useState(false);
+  const [status,   setStatus]   = useState("");
+  const [error,    setError]    = useState(null);
+  const [date,     setDate]     = useState("2026-03-26");
+  const [sortBy,   setSortBy]   = useState("grade");
+  const [fetched,  setFetched]  = useState(false);
+
+  // ── Chat state ─────────────────────────────────────────────────────────────
+  const [nickname,        setNickname]        = useState(() => localStorage.getItem("nrfi-nickname") || "");
+  const [showNickPrompt,  setShowNickPrompt]  = useState(false);
 
   const load = useCallback(async (d) => {
     setLoading(true); setError(null); setGames([]); setFetched(false);
@@ -546,8 +703,19 @@ export default function App() {
         </div>
       </div>
 
+      {/* Nickname prompt — shown on first chat or when changing name */}
+      {showNickPrompt && (
+        <NicknamePrompt onSave={(n) => {
+          localStorage.setItem("nrfi-nickname", n);
+          setNickname(n);
+          setShowNickPrompt(false);
+        }}/>
+      )}
+
       {/* Body */}
-      <div style={{maxWidth:1100,margin:"32px auto 0",padding:"0 24px"}}>
+      <div style={{maxWidth:1400,margin:"32px auto 0",padding:"0 24px",display:"flex",gap:20,alignItems:"flex-start"}}>
+        {/* Main content column */}
+        <div style={{flex:1,minWidth:0}}>
         {!loading && !fetched && !error && (
           <div style={{textAlign:"center",padding:"80px 20px"}}>
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:52,color:"#0d1f30",letterSpacing:6,lineHeight:1}}>NRFI</div>
@@ -590,6 +758,24 @@ export default function App() {
         {!loading && sorted.length > 0 && (
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:20}}>
             {sorted.map((g, i) => <Card key={g.id || i} game={g} idx={i}/>)}
+          </div>
+        )}
+        </div>{/* end main content column */}
+
+        {/* Chat sidebar — visible once a date is selected */}
+        {(fetched || loading) && (
+          <div style={{width:320,flexShrink:0,position:"sticky",top:90,height:"calc(100vh - 110px)"}}>
+            <ChatPanel
+              date={date}
+              nickname={nickname || "Anonymous"}
+              onChangeNickname={() => setShowNickPrompt(true)}
+            />
+            {!nickname && !showNickPrompt && (
+              <button
+                onClick={() => setShowNickPrompt(true)}
+                style={{marginTop:10,width:"100%",padding:"9px",background:"#0d1f30",border:"1px dashed #1a2e42",borderRadius:8,color:"#4a6080",fontFamily:"'Space Mono',monospace",fontSize:10,cursor:"pointer",letterSpacing:1}}
+              >SET YOUR NICKNAME</button>
+            )}
           </div>
         )}
       </div>
