@@ -25,32 +25,42 @@ const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, pf }) => {
                    { g:"D", c:"#ff4d6d", l:"Risky NRFI",  s };
 };
 
-// ── Claude API ────────────────────────────────────────────────────────────────
-const askClaude = async (system, user) => {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 4096,
-      system,
-      tools: [{ type: "web_search_20250305", name: "web_search" }],
-      messages: [{ role: "user", content: user }],
-    }),
-  });
-  if (!r.ok) throw new Error(`API error ${r.status}`);
-  const d = await r.json();
-  return d.content.filter(b => b.type === "text").map(b => b.text).join("").trim();
+// ── MLB Stats API ─────────────────────────────────────────────────────────────
+const MLB_API = "https://statsapi.mlb.com/api/v1";
+
+const fetchSchedule = async (date) => {
+  const r = await fetch(
+    `${MLB_API}/schedule?sportId=1&date=${date}&hydrate=probablePitcher,team,venue`
+  );
+  if (!r.ok) throw new Error(`MLB schedule API error ${r.status}`);
+  return r.json();
 };
 
-const parseJSON = (text, fallback) => {
-  const cleaned = text.replace(/```[\w]*\n?/g, "").replace(/```/g, "").trim();
-  const open = Array.isArray(fallback) ? "[" : "{";
-  const close = Array.isArray(fallback) ? "]" : "}";
-  const i = cleaned.indexOf(open), j = cleaned.lastIndexOf(close);
-  if (i === -1 || j === -1) return fallback;
-  try { return JSON.parse(cleaned.slice(i, j + 1)); }
-  catch { return fallback; }
+const fetchPitcherStats = async (personId, season) => {
+  try {
+    const r = await fetch(
+      `${MLB_API}/people/${personId}/stats?stats=season&group=pitching&season=${season}`
+    );
+    if (!r.ok) return null;
+    const d = await r.json();
+    const splits = d.stats?.[0]?.splits;
+    if (!splits?.length) return null;
+    const stat = splits[splits.length - 1].stat;
+    return {
+      era:  stat.era  != null ? parseFloat(stat.era)  : null,
+      whip: stat.whip != null ? parseFloat(stat.whip) : null,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const formatGameTime = (isoString) => {
+  try {
+    return new Date(isoString).toLocaleTimeString("en-US", {
+      hour: "numeric", minute: "2-digit", timeZone: "America/New_York", timeZoneName: "short",
+    });
+  } catch { return "TBD"; }
 };
 
 // ── Components ────────────────────────────────────────────────────────────────
@@ -135,71 +145,51 @@ export default function App() {
   const [sortBy,  setSortBy]  = useState("grade");
   const [fetched, setFetched] = useState(false);
 
-  const SYSTEM = `You are a sports data assistant. Use web_search to find current MLB schedule and pitcher stats. Always respond with ONLY a raw JSON value. No markdown, no code fences, no explanation text. Your entire response must be valid JSON parseable by JSON.parse().`;
-
   const load = useCallback(async (d) => {
     setLoading(true); setError(null); setGames([]); setFetched(false);
-    const dateObj = new Date(d + "T12:00:00");
-    const monthDay = dateObj.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    const season = d.slice(0, 4);
 
     try {
-      // ── Step 1: Schedule via web search ──────────────────────────────────
-      setStatus("SEARCHING FOR TODAY'S GAMES...");
-      const schedText = await askClaude(SYSTEM,
-        `Search for the MLB schedule on ${monthDay}. Find all games being played that day including the starting/probable pitchers for each game.
+      // ── Step 1: Fetch schedule ────────────────────────────────────────────
+      setStatus("FETCHING SCHEDULE...");
+      const schedData = await fetchSchedule(d);
+      const rawGames = schedData.dates?.[0]?.games ?? [];
 
-Return a JSON array where each element is:
-{
-  "id": <unique number 1,2,3...>,
-  "gameTime": "<time like 7:05 PM ET>",
-  "venue": "<ballpark name>",
-  "awayTeam": "<team short name e.g. Yankees>",
-  "homeTeam": "<team short name e.g. Giants>",
-  "awayPitcher": "<First Last or null>",
-  "homePitcher": "<First Last or null>"
-}
-
-Return [] if no games found. Return ONLY the JSON array.`
-      );
-
-      const schedule = parseJSON(schedText, []);
-      if (!schedule.length) {
+      if (!rawGames.length) {
         setGames([]); setFetched(true); setLoading(false); setStatus(""); return;
       }
 
-      // ── Step 2: Pitcher stats via web search ──────────────────────────────
-      const pitchers = [...new Set(
-        schedule.flatMap(g => [g.awayPitcher, g.homePitcher]).filter(p => p && p !== "null" && p !== "TBD")
+      // ── Step 2: Extract games & collect pitcher IDs ───────────────────────
+      const gameList = rawGames.map((g, i) => ({
+        id: g.gamePk ?? i,
+        gameTime: formatGameTime(g.gameDate),
+        venue: g.venue?.name ?? "",
+        awayTeam: g.teams?.away?.team?.teamName ?? g.teams?.away?.team?.name ?? "Away",
+        homeTeam: g.teams?.home?.team?.teamName ?? g.teams?.home?.team?.name ?? "Home",
+        awayPitcher: g.teams?.away?.probablePitcher?.fullName ?? null,
+        awayPitcherId: g.teams?.away?.probablePitcher?.id ?? null,
+        homePitcher: g.teams?.home?.probablePitcher?.fullName ?? null,
+        homePitcherId: g.teams?.home?.probablePitcher?.id ?? null,
+      }));
+
+      // ── Step 3: Fetch pitcher stats in parallel ───────────────────────────
+      setStatus("FETCHING PITCHER STATS...");
+      const pitcherIds = [...new Set(
+        gameList.flatMap(g => [g.awayPitcherId, g.homePitcherId]).filter(Boolean)
       )];
 
-      let statsMap = {};
-      if (pitchers.length > 0) {
-        setStatus(`FETCHING PITCHER STATS...`);
-        const year = d.slice(0, 4);
-        const statsText = await askClaude(SYSTEM,
-          `Search for ${year} MLB season pitching stats for these pitchers: ${pitchers.join(", ")}
+      const statsEntries = await Promise.all(
+        pitcherIds.map(async (id) => [id, await fetchPitcherStats(id, season)])
+      );
+      const statsMap = Object.fromEntries(statsEntries);
 
-For each pitcher find their current ${year} season ERA and WHIP.
-
-Return a JSON object where keys are pitcher full names and values are their stats:
-{
-  "Max Fried": {"era": 2.85, "whip": 1.05},
-  "Logan Webb": {"era": 3.12, "whip": 1.18}
-}
-
-Use null for any stat not yet available. Return ONLY the JSON object.`
-        );
-        statsMap = parseJSON(statsText, {});
-      }
-
-      // ── Step 3: merge ─────────────────────────────────────────────────────
-      const toNum = v => (v != null && v !== "null" && !isNaN(Number(v))) ? Number(v) : null;
-      const enriched = schedule.map(g => ({
+      // ── Step 4: Merge stats into games ────────────────────────────────────
+      const enriched = gameList.map(g => ({
         ...g,
-        awayERA:  toNum(statsMap[g.awayPitcher]?.era),
-        awayWHIP: toNum(statsMap[g.awayPitcher]?.whip),
-        homeERA:  toNum(statsMap[g.homePitcher]?.era),
-        homeWHIP: toNum(statsMap[g.homePitcher]?.whip),
+        awayERA:  statsMap[g.awayPitcherId]?.era  ?? null,
+        awayWHIP: statsMap[g.awayPitcherId]?.whip ?? null,
+        homeERA:  statsMap[g.homePitcherId]?.era  ?? null,
+        homeWHIP: statsMap[g.homePitcherId]?.whip ?? null,
       }));
 
       setGames(enriched);
@@ -325,7 +315,7 @@ Use null for any stat not yet available. Return ONLY the JSON object.`
       </div>
 
       <div style={{textAlign:"center",marginTop:48,fontFamily:"'Space Mono',monospace",fontSize:10,color:"#1a2e42",letterSpacing:2}}>
-        DATA VIA WEB SEARCH · FOR ENTERTAINMENT PURPOSES ONLY
+        DATA VIA MLB STATS API · FOR ENTERTAINMENT PURPOSES ONLY
       </div>
     </div>
   );
