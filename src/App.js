@@ -150,6 +150,24 @@ const fetchSchedule = async (date) => {
   return r.json();
 };
 
+const fetchFirstInningResult = async (gamePk) => {
+  try {
+    const r = await fetch(`${MLB_API}/game/${gamePk}/linescore`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const first = d.innings?.find(i => i.num === 1);
+    if (!first) return null;
+    // homeRuns is only set once the bottom of the 1st is complete
+    const homeRuns = first.home?.runs;
+    if (homeRuns == null) return null;
+    const awayRuns = first.away?.runs ?? 0;
+    const totalRuns = awayRuns + homeRuns;
+    return { nrfi: totalRuns === 0, totalRuns, awayRuns, homeRuns };
+  } catch {
+    return null;
+  }
+};
+
 const fetchPitcherStats = async (personId, season) => {
   try {
     const r = await fetch(
@@ -212,6 +230,32 @@ const Chip = ({ label, color }) => (
   </div>
 );
 
+const FirstInningBanner = ({ result }) => {
+  if (!result) return null;
+  const { nrfi, totalRuns, awayRuns, homeRuns } = result;
+  const bg   = nrfi ? "linear-gradient(135deg,#003d2a,#004d34)" : "linear-gradient(135deg,#3d0010,#4d0015)";
+  const border = nrfi ? "#00e5a040" : "#ff4d6d40";
+  const accent = nrfi ? "#00e5a0" : "#ff4d6d";
+  const label  = nrfi ? "NRFI" : "YRFI";
+  const icon   = nrfi ? "✓" : "✗";
+  const sub    = nrfi
+    ? "NO RUNS IN THE FIRST INNING"
+    : `${totalRuns} RUN${totalRuns !== 1 ? "S" : ""} SCORED · AWAY ${awayRuns} · HOME ${homeRuns}`;
+
+  return (
+    <div style={{margin:"-20px -22px 16px",padding:"14px 22px",background:bg,borderBottom:`1px solid ${border}`,display:"flex",alignItems:"center",gap:14}}>
+      <div style={{width:48,height:48,borderRadius:"50%",background:`${accent}20`,border:`2px solid ${accent}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,color:accent,fontWeight:700,flexShrink:0,lineHeight:1}}>
+        {icon}
+      </div>
+      <div>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:3,color:accent,lineHeight:1}}>{label}</div>
+        <div style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:`${accent}99`,letterSpacing:1,marginTop:3}}>{sub}</div>
+      </div>
+      <div style={{marginLeft:"auto",fontFamily:"'Bebas Neue',sans-serif",fontSize:52,color:`${accent}15`,lineHeight:1,userSelect:"none"}}>{label}</div>
+    </div>
+  );
+};
+
 const Card = ({ game, idx }) => {
   const pf = getPF(game.venue);
   const weatherDelta = calcWeatherDelta(game.weather);
@@ -226,13 +270,19 @@ const Card = ({ game, idx }) => {
     ? (wx.tempF < 50 ? "#4a9eff" : wx.tempF > 85 ? "#ff9f43" : "#4a6080")
     : "#4a6080";
 
+  const result = game.firstInning ?? null;
+  const cardBorder = result
+    ? (result.nrfi ? "#00e5a0" : "#ff4d6d")
+    : nr.c;
+
   return (
     <div
-      style={{background:"linear-gradient(145deg,#0d1f30,#0a1520)",border:"1px solid #1a2e42",borderTop:`3px solid ${nr.c}`,borderRadius:12,padding:"20px 22px",position:"relative",overflow:"hidden",animation:`fadeUp .4s ease ${idx * .06}s both`,transition:"transform .2s,box-shadow .2s"}}
+      style={{background:"linear-gradient(145deg,#0d1f30,#0a1520)",border:`1px solid ${result ? (result.nrfi ? "#00e5a030" : "#ff4d6d30") : "#1a2e42"}`,borderTop:`3px solid ${cardBorder}`,borderRadius:12,padding:"20px 22px",position:"relative",overflow:"hidden",animation:`fadeUp .4s ease ${idx * .06}s both`,transition:"transform .2s,box-shadow .2s"}}
       onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-3px)";e.currentTarget.style.boxShadow="0 12px 40px rgba(0,0,0,.5)";}}
       onMouseLeave={e=>{e.currentTarget.style.transform="translateY(0)";e.currentTarget.style.boxShadow="none";}}
     >
       <div style={{position:"absolute",top:-30,right:-30,width:120,height:120,borderRadius:"50%",background:`${nr.c}08`,pointerEvents:"none"}}/>
+      <FirstInningBanner result={result}/>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14,gap:12}}>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:2,color:"#e0eaf4",lineHeight:1.15}}>
@@ -298,6 +348,8 @@ export default function App() {
 
       const gameList = rawGames.map((g, i) => ({
         id: g.gamePk ?? i,
+        gamePk: g.gamePk,
+        gameState: g.status?.abstractGameState ?? "Preview", // "Preview" | "Live" | "Final"
         gameIso: g.gameDate,
         gameTime: formatGameTime(g.gameDate),
         venue: g.venue?.name ?? "",
@@ -315,13 +367,17 @@ export default function App() {
         gameList.flatMap(g => [g.awayPitcherId, g.homePitcherId]).filter(Boolean)
       )];
 
-      const [statsEntries, weatherResults] = await Promise.all([
+      const [statsEntries, weatherResults, firstInningResults] = await Promise.all([
         Promise.all(pitcherIds.map(async (id) => [id, await fetchPitcherStats(id, season)])),
         Promise.all(gameList.map(async (g) => {
           const stadium = getStadium(g.venue);
           if (!stadium) return null;
           const wx = await fetchWeather(stadium.lat, stadium.lon, d, g.gameIso);
           return wx ? { ...wx, cfBearing: stadium.cfBearing, isIndoor: stadium.indoor } : null;
+        })),
+        Promise.all(gameList.map(async (g) => {
+          if (g.gameState === "Preview" || !g.gamePk) return null;
+          return fetchFirstInningResult(g.gamePk);
         })),
       ]);
 
@@ -330,11 +386,12 @@ export default function App() {
       // ── Step 3: Merge ─────────────────────────────────────────────────────
       const enriched = gameList.map((g, i) => ({
         ...g,
-        awayERA:  statsMap[g.awayPitcherId]?.era  ?? null,
-        awayWHIP: statsMap[g.awayPitcherId]?.whip ?? null,
-        homeERA:  statsMap[g.homePitcherId]?.era  ?? null,
-        homeWHIP: statsMap[g.homePitcherId]?.whip ?? null,
-        weather: weatherResults[i],
+        awayERA:      statsMap[g.awayPitcherId]?.era  ?? null,
+        awayWHIP:     statsMap[g.awayPitcherId]?.whip ?? null,
+        homeERA:      statsMap[g.homePitcherId]?.era  ?? null,
+        homeWHIP:     statsMap[g.homePitcherId]?.whip ?? null,
+        weather:      weatherResults[i],
+        firstInning:  firstInningResults[i],
       }));
 
       setGames(enriched);
