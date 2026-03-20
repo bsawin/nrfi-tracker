@@ -45,6 +45,28 @@ Each entry: `[nameSubstring, { lat, lon, cfBearing, indoor }]`
 - `firstInning.nrfi = true` when `awayRuns + homeRuns === 0`
 - Card shows prominent green (NRFI ✓) or red (YRFI ✗) banner when result is known
 
+## Outcome Storage (DynamoDB)
+Every game load saves predictions + eventual results to DynamoDB for model training.
+
+| Resource | Detail |
+|---|---|
+| DynamoDB table | `nrfi-outcomes` (us-east-1), PK = `gamePk` (String), on-demand billing |
+| Lambda | `nrfi-outcomes` (Node.js 18, SDK v3 bundled) — source in `lambda/index.js` |
+| API Gateway | HTTP API `q0jutr0ldh` → `https://q0jutr0ldh.execute-api.us-east-1.amazonaws.com` |
+| IAM role | `nrfi-lambda-role` |
+
+**Endpoints:**
+- `PUT /outcomes/{gamePk}` — upsert game record (prediction on load, result when 1st inning done)
+- `GET /outcomes?season=2026` — returns all records with `actualNRFI` set (for calibration)
+
+**DynamoDB record fields:** `gamePk, season, date, homeTeam, awayTeam, venue, homePitcher, awayPitcher, homeERA, awayERA, homeWHIP, awayWHIP, parkFactor, weatherDelta, predictedScore, predictedGrade, actualNRFI?, totalRuns?, updatedAt`
+
+**To redeploy Lambda:**
+```bash
+cd lambda && npm install && zip -r ../function.zip index.js node_modules
+aws lambda update-function-code --function-name nrfi-outcomes --zip-file fileb://../function.zip --region us-east-1
+```
+
 ## Deploy Command
 ```bash
 npm run build
