@@ -626,17 +626,76 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
         </div>
       </div>
 
-      <div style={{marginBottom:14}}>
+      <div style={{marginBottom:0}}>
         <PRow side="AWAY" name={game.awayPitcher} era={game.awayERA} whip={game.awayWHIP} team={game.awayTeam} priorSeason={game.awayStatSeason !== String(game.gameIso?.slice(0,4)) ? game.awayStatSeason : null}/>
         <PRow side="HOME" name={game.homePitcher} era={game.homeERA} whip={game.homeWHIP} team={game.homeTeam} priorSeason={game.homeStatSeason !== String(game.gameIso?.slice(0,4)) ? game.homeStatSeason : null}/>
       </div>
+
+      {/* Lineup quality */}
+      {(game.awayOPS != null || game.homeOPS != null) && (() => {
+        const opsColor  = (ops)  => ops  >= 0.78 ? "#ff4d6d" : ops  <= 0.70 ? "#00e5a0" : "#f5c842";
+        const kPctColor = (kpct) => kpct >= 24   ? "#00e5a0" : kpct <= 18   ? "#ff4d6d" : "#f5c842";
+        return (
+          <div style={{display:"flex",gap:0,padding:"8px 0",borderBottom:"1px solid #0e1822",borderTop:"1px solid #0e1822",marginTop:2}}>
+            {[["AWAY", game.awayOPS, game.awayKPct], ["HOME", game.homeOPS, game.homeKPct]].map(([side, ops, kpct], i) => (
+              <div key={side} style={{flex:1,paddingLeft: i === 0 ? 16 : 12, borderLeft: i === 1 ? "1px solid #0e1822" : "none"}}>
+                <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:"#4a6080",letterSpacing:1,marginBottom:4}}>{side} LINEUP</div>
+                <div style={{display:"flex",gap:10}}>
+                  {ops  != null && <span style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#8899aa"}}>OPS <span style={{color:opsColor(ops)}}>{ops.toFixed(3)}</span></span>}
+                  {kpct != null && <span style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#8899aa"}}>K% <span style={{color:kPctColor(kpct)}}>{kpct.toFixed(1)}%</span></span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* Score breakdown */}
+      {(() => {
+        const avgERA2  = ((game.homeERA  ?? 4.5) + (game.awayERA  ?? 4.5)) / 2;
+        const avgWHIP2 = ((game.homeWHIP ?? 1.3)  + (game.awayWHIP ?? 1.3))  / 2;
+        const eraP  = Math.max(0, (avgERA2  - 3.0) * 25);
+        const whipP = Math.max(0, (avgWHIP2 - 1.0) * 40);
+        const parkP = (pf - 1.0) * 60;
+        const wxD   = weatherDelta;
+        const rows = [
+          { label: "ERA penalty",  val: -eraP,  color: "#ff4d6d" },
+          { label: "WHIP penalty", val: -whipP, color: "#ff4d6d" },
+          { label: "Park penalty", val: -parkP, color: parkP > 0 ? "#ff9f43" : parkP < 0 ? "#00e5a0" : "#4a6080" },
+          { label: "Weather",      val:  wxD,   color: wxD >= 0 ? "#00e5a0" : "#ff4d6d" },
+        ];
+        const maxAbs = Math.max(...rows.map(r => Math.abs(r.val)), 1);
+        return (
+          <div style={{margin:"10px 0",padding:"10px 12px",background:"#060f18",border:"1px solid #0e1822",borderRadius:8}}>
+            <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:"#4a6080",letterSpacing:1,marginBottom:8}}>SCORE BREAKDOWN · STARTS AT 100</div>
+            {rows.map(({ label, val, color }) => (
+              <div key={label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                <div style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",width:82,flexShrink:0}}>{label}</div>
+                <div style={{flex:1,height:5,background:"#1a2e42",borderRadius:3,overflow:"hidden"}}>
+                  <div style={{width:`${Math.abs(val) / maxAbs * 100}%`,height:"100%",background:color,borderRadius:3}}/>
+                </div>
+                <div style={{fontFamily:"'Space Mono',monospace",fontSize:8,color,width:34,textAlign:"right",flexShrink:0}}>
+                  {val >= 0 ? "+" : "−"}{Math.abs(val).toFixed(1)}
+                </div>
+              </div>
+            ))}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginTop:8,paddingTop:6,borderTop:"1px solid #0e1822"}}>
+              <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",letterSpacing:1}}>FINAL SCORE</span>
+              <div style={{display:"flex",alignItems:"baseline",gap:8}}>
+                <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#2a4060"}}>
+                  100 − {eraP.toFixed(1)} − {whipP.toFixed(1)} {parkP >= 0 ? "−" : "+"} {Math.abs(parkP).toFixed(1)} {wxD >= 0 ? "+" : "−"} {Math.abs(wxD).toFixed(1)} =
+                </span>
+                <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:nr.c,lineHeight:1}}>{nr.s}</span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Chips row */}
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <Chip label={`PARK ${pf > 1 ? "+" : ""}${pfPct}%`} color={pfc}/>
         {avgERA && <Chip label={`AVG ERA ${avgERA}`} color="#4a6080"/>}
-
-        {/* Weather chips */}
         {wx?.isIndoor && <Chip label="DOME" color="#4a6080"/>}
         {wx && !wx.isIndoor && wx.tempF != null &&
           <Chip label={`${Math.round(wx.tempF)}°F`} color={tempColor}/>}
