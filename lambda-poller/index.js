@@ -137,6 +137,20 @@ const calcWeatherDelta = (wx) => {
   return Math.round(delta);
 };
 
+// ── Team Hitting Stats ────────────────────────────────────────────────────────
+const fetchTeamStats = async (teamId, season) => {
+  try {
+    const d = await get(`${MLB_API}/teams/${teamId}/stats?stats=season&group=hitting&season=${season}`);
+    const stat = d.stats?.[0]?.splits?.[0]?.stat;
+    if (!stat) return null;
+    const ops  = stat.ops != null ? parseFloat(stat.ops) : null;
+    const so   = stat.strikeOuts       ?? 0;
+    const pa   = stat.plateAppearances ?? 0;
+    const kPct = pa > 0 ? Math.round((so / pa) * 1000) / 10 : null;
+    return { ops, kPct };
+  } catch { return null; }
+};
+
 // ── Pitcher Stats ─────────────────────────────────────────────────────────────
 const fetchPitcherStats = async (personId, season) => {
   const tryFetch = async (s) => {
@@ -200,17 +214,21 @@ exports.handler = async () => {
       const awayPitcherId   = game.teams?.away?.probablePitcher?.id ?? null;
       const homePitcherName = game.teams?.home?.probablePitcher?.fullName ?? null;
       const awayPitcherName = game.teams?.away?.probablePitcher?.fullName ?? null;
+      const homeTeamId      = game.teams?.home?.team?.id ?? null;
+      const awayTeamId      = game.teams?.away?.team?.id ?? null;
 
       try {
         if (state === "Preview") {
-          // ── Refresh prediction with latest pitcher + weather ───────────────
+          // ── Refresh prediction with latest pitcher + weather + lineup ──────
           const stadium = getStadium(venueName);
           const pf = getPF(venueName);
 
-          const [homeStats, awayStats, rawWeather] = await Promise.all([
+          const [homeStats, awayStats, rawWeather, homeTeamStats, awayTeamStats] = await Promise.all([
             homePitcherId ? fetchPitcherStats(homePitcherId, season) : Promise.resolve(null),
             awayPitcherId ? fetchPitcherStats(awayPitcherId, season) : Promise.resolve(null),
             stadium       ? fetchWeather(stadium.lat, stadium.lon, date, gameIso) : Promise.resolve(null),
+            homeTeamId    ? fetchTeamStats(homeTeamId, season) : Promise.resolve(null),
+            awayTeamId    ? fetchTeamStats(awayTeamId, season) : Promise.resolve(null),
           ]);
 
           const wx = rawWeather && stadium
@@ -223,6 +241,13 @@ exports.handler = async () => {
             homeWHIP: homeStats?.whip ?? null, awayWHIP: awayStats?.whip ?? null,
             pf, weatherDelta,
           });
+
+          const homeERA  = homeStats?.era  ?? null;
+          const awayERA  = awayStats?.era  ?? null;
+          const homeWHIP = homeStats?.whip ?? null;
+          const awayWHIP = awayStats?.whip ?? null;
+          const avgERA   = ((homeERA  ?? 4.5) + (awayERA  ?? 4.5)) / 2;
+          const avgWHIP  = ((homeWHIP ?? 1.3)  + (awayWHIP ?? 1.3))  / 2;
 
           await client.send(new UpdateCommand({
             TableName: TABLE,
@@ -241,6 +266,13 @@ exports.handler = async () => {
               homeWHIP             = :homeWHIP,
               awayWHIP             = :awayWHIP,
               parkFactor           = :pf,
+              homeOPS              = :homeOPS,
+              awayOPS              = :awayOPS,
+              homeKPct             = :homeKPct,
+              awayKPct             = :awayKPct,
+              eraPenalty           = :eraPenalty,
+              whipPenalty          = :whipPenalty,
+              parkPenalty          = :parkPenalty,
               tempF                = :tempF,
               windSpeed            = :windSpeed,
               windDir              = :windDir,
@@ -262,11 +294,18 @@ exports.handler = async () => {
               ":venue":        venueName,
               ":homePitcher":  homePitcherName,
               ":awayPitcher":  awayPitcherName,
-              ":homeERA":      homeStats?.era  ?? null,
-              ":awayERA":      awayStats?.era  ?? null,
-              ":homeWHIP":     homeStats?.whip ?? null,
-              ":awayWHIP":     awayStats?.whip ?? null,
+              ":homeERA":      homeERA,
+              ":awayERA":      awayERA,
+              ":homeWHIP":     homeWHIP,
+              ":awayWHIP":     awayWHIP,
               ":pf":           pf,
+              ":homeOPS":      homeTeamStats?.ops  ?? null,
+              ":awayOPS":      awayTeamStats?.ops  ?? null,
+              ":homeKPct":     homeTeamStats?.kPct ?? null,
+              ":awayKPct":     awayTeamStats?.kPct ?? null,
+              ":eraPenalty":   Math.round(Math.max(0, (avgERA  - 3.0) * 25) * 100) / 100,
+              ":whipPenalty":  Math.round(Math.max(0, (avgWHIP - 1.0) * 40) * 100) / 100,
+              ":parkPenalty":  Math.round((pf - 1.0) * 60 * 100) / 100,
               ":tempF":        wx?.tempF     ?? null,
               ":windSpeed":    wx?.windSpeed ?? null,
               ":windDir":      wx?.windDir   ?? null,

@@ -148,7 +148,10 @@ const getWindInfo = (weather) => {
 const OUTCOMES_API = "https://q0jutr0ldh.execute-api.us-east-1.amazonaws.com";
 
 const buildOutcomePayload = (game, predictedScore, predictedGrade, season, firstInning = null) => {
-  const wx = game.weather;
+  const wx  = game.weather;
+  const pf  = getPF(game.venue);
+  const avgERA  = ((game.homeERA  ?? 4.5) + (game.awayERA  ?? 4.5)) / 2;
+  const avgWHIP = ((game.homeWHIP ?? 1.3)  + (game.awayWHIP ?? 1.3))  / 2;
   const payload = {
     season,
     date:           game.gameIso?.slice(0, 10),
@@ -162,7 +165,16 @@ const buildOutcomePayload = (game, predictedScore, predictedGrade, season, first
     awayERA:        game.awayERA,
     homeWHIP:       game.homeWHIP,
     awayWHIP:       game.awayWHIP,
-    parkFactor:     getPF(game.venue),
+    parkFactor:     pf,
+    // Team hitting stats — for model refinement
+    homeOPS:        game.homeOPS  ?? null,
+    awayOPS:        game.awayOPS  ?? null,
+    homeKPct:       game.homeKPct ?? null,
+    awayKPct:       game.awayKPct ?? null,
+    // Individual score components — lets us reweight formula against actuals later
+    eraPenalty:     Math.round(Math.max(0, (avgERA  - 3.0) * 25) * 100) / 100,
+    whipPenalty:    Math.round(Math.max(0, (avgWHIP - 1.0) * 40) * 100) / 100,
+    parkPenalty:    Math.round((pf - 1.0) * 60 * 100) / 100,
     // Individual weather components preserved for model training
     tempF:          wx?.tempF        ?? null,
     windSpeed:      wx?.windSpeed    ?? null,
@@ -404,6 +416,23 @@ const fetchFirstInningResult = async (gamePk) => {
   } catch {
     return null;
   }
+};
+
+const fetchTeamStats = async (teamId, season) => {
+  try {
+    const r = await fetch(
+      `${MLB_API}/teams/${teamId}/stats?stats=season&group=hitting&season=${season}`
+    );
+    if (!r.ok) return null;
+    const d = await r.json();
+    const stat = d.stats?.[0]?.splits?.[0]?.stat;
+    if (!stat) return null;
+    const ops  = stat.ops  != null ? parseFloat(stat.ops)  : null;
+    const so   = stat.strikeOuts       ?? 0;
+    const pa   = stat.plateAppearances ?? 0;
+    const kPct = pa > 0 ? Math.round((so / pa) * 1000) / 10 : null;
+    return { ops, kPct };
+  } catch { return null; }
 };
 
 const fetchPitcherStats = async (personId, season) => {
@@ -822,15 +851,20 @@ export default function App() {
         awayPitcherId: g.teams?.away?.probablePitcher?.id ?? null,
         homePitcher: g.teams?.home?.probablePitcher?.fullName ?? null,
         homePitcherId: g.teams?.home?.probablePitcher?.id ?? null,
+        homeTeamId: g.teams?.home?.team?.id ?? null,
+        awayTeamId: g.teams?.away?.team?.id ?? null,
       }));
 
-      // ── Step 2: Fetch pitcher stats + weather in parallel ─────────────────
+      // ── Step 2: Fetch pitcher stats + weather + team hitting in parallel ──
       setStatus("FETCHING STATS & WEATHER...");
       const pitcherIds = [...new Set(
         gameList.flatMap(g => [g.awayPitcherId, g.homePitcherId]).filter(Boolean)
       )];
+      const teamIds = [...new Set(
+        gameList.flatMap(g => [g.homeTeamId, g.awayTeamId]).filter(Boolean)
+      )];
 
-      const [statsEntries, weatherResults, firstInningResults] = await Promise.all([
+      const [statsEntries, weatherResults, firstInningResults, teamStatsEntries] = await Promise.all([
         Promise.all(pitcherIds.map(async (id) => [id, await fetchPitcherStats(id, season)])),
         Promise.all(gameList.map(async (g) => {
           const stadium = getStadium(g.venue);
@@ -842,21 +876,27 @@ export default function App() {
           if (g.gameState === "Preview" || !g.gamePk) return null;
           return fetchFirstInningResult(g.gamePk);
         })),
+        Promise.all(teamIds.map(async (id) => [id, await fetchTeamStats(id, season)])),
       ]);
 
-      const statsMap = Object.fromEntries(statsEntries);
+      const statsMap     = Object.fromEntries(statsEntries);
+      const teamStatsMap = Object.fromEntries(teamStatsEntries);
 
       // ── Step 3: Merge ─────────────────────────────────────────────────────
       const enriched = gameList.map((g, i) => ({
         ...g,
-        awayERA:       statsMap[g.awayPitcherId]?.era        ?? null,
-        awayWHIP:      statsMap[g.awayPitcherId]?.whip       ?? null,
-        homeERA:       statsMap[g.homePitcherId]?.era        ?? null,
-        homeWHIP:      statsMap[g.homePitcherId]?.whip       ?? null,
+        awayERA:        statsMap[g.awayPitcherId]?.era        ?? null,
+        awayWHIP:       statsMap[g.awayPitcherId]?.whip       ?? null,
+        homeERA:        statsMap[g.homePitcherId]?.era        ?? null,
+        homeWHIP:       statsMap[g.homePitcherId]?.whip       ?? null,
         awayStatSeason: statsMap[g.awayPitcherId]?.statSeason ?? null,
         homeStatSeason: statsMap[g.homePitcherId]?.statSeason ?? null,
-        weather:       weatherResults[i],
-        firstInning:   firstInningResults[i],
+        homeOPS:        teamStatsMap[g.homeTeamId]?.ops       ?? null,
+        awayOPS:        teamStatsMap[g.awayTeamId]?.ops       ?? null,
+        homeKPct:       teamStatsMap[g.homeTeamId]?.kPct      ?? null,
+        awayKPct:       teamStatsMap[g.awayTeamId]?.kPct      ?? null,
+        weather:        weatherResults[i],
+        firstInning:    firstInningResults[i],
       }));
 
       setGames(enriched);
