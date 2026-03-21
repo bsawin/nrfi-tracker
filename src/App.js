@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import bennyLogo from "./logo.png";
 
 // ── Scoring ───────────────────────────────────────────────────────────────────
 const PARK_FACTORS = {
@@ -13,16 +14,20 @@ const getPF = (venue = "") => {
     if (venue.toLowerCase().includes(k.toLowerCase())) return f;
   return 1.0;
 };
+// Scoring recalibrated against MLB historical NRFI rate (~26-30%).
+// Old multipliers (ERA×12, WHIP×20) gave A grades to every average matchup.
+// New multipliers (ERA×25, WHIP×40) anchor average pitching (~4.2 ERA / 1.28 WHIP)
+// to the C/B boundary, reserving A for genuinely elite matchups.
 const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, pf, weatherDelta = 0 }) => {
   let s = 100;
-  s -= Math.max(0, (((homeERA ?? 4) + (awayERA ?? 4)) / 2 - 3.0) * 12);
-  s -= Math.max(0, (((homeWHIP ?? 1.3) + (awayWHIP ?? 1.3)) / 2 - 1.0) * 20);
+  s -= Math.max(0, (((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2 - 3.0) * 25);
+  s -= Math.max(0, (((homeWHIP ?? 1.3) + (awayWHIP ?? 1.3)) / 2 - 1.0) * 40);
   s -= (pf - 1.0) * 60;
   s += weatherDelta;
   s = Math.round(Math.max(0, Math.min(100, s)));
-  return s >= 72 ? { g:"A", c:"#00e5a0", l:"Strong NRFI", s } :
-         s >= 55 ? { g:"B", c:"#f5c842", l:"Lean NRFI",   s } :
-         s >= 40 ? { g:"C", c:"#ff9f43", l:"Toss-Up",     s } :
+  return s >= 75 ? { g:"A", c:"#00e5a0", l:"Strong NRFI", s } :
+         s >= 58 ? { g:"B", c:"#f5c842", l:"Lean NRFI",   s } :
+         s >= 42 ? { g:"C", c:"#ff9f43", l:"Toss-Up",     s } :
                    { g:"D", c:"#ff4d6d", l:"Risky NRFI",  s };
 };
 
@@ -142,28 +147,65 @@ const getWindInfo = (weather) => {
 // ── Outcomes API (DynamoDB via Lambda) ───────────────────────────────────────
 const OUTCOMES_API = "https://q0jutr0ldh.execute-api.us-east-1.amazonaws.com";
 
+const buildOutcomePayload = (game, predictedScore, predictedGrade, season, firstInning = null) => {
+  const wx = game.weather;
+  const payload = {
+    season,
+    date:           game.gameIso?.slice(0, 10),
+    gameTime:       game.gameIso,
+    homeTeam:       game.homeTeam,
+    awayTeam:       game.awayTeam,
+    venue:          game.venue,
+    homePitcher:    game.homePitcher,
+    awayPitcher:    game.awayPitcher,
+    homeERA:        game.homeERA,
+    awayERA:        game.awayERA,
+    homeWHIP:       game.homeWHIP,
+    awayWHIP:       game.awayWHIP,
+    parkFactor:     getPF(game.venue),
+    // Individual weather components preserved for model training
+    tempF:          wx?.tempF        ?? null,
+    windSpeed:      wx?.windSpeed    ?? null,
+    windDir:        wx?.windDir      ?? null,
+    precipPct:      wx?.precipPct    ?? null,
+    isIndoor:       wx?.isIndoor     ?? false,
+    weatherDelta:   calcWeatherDelta(wx),
+    predictedScore,
+    predictedGrade,
+  };
+  if (firstInning) {
+    payload.actualNRFI  = firstInning.nrfi;
+    payload.totalRuns   = firstInning.totalRuns;
+    payload.awayRuns    = firstInning.awayRuns;
+    payload.homeRuns    = firstInning.homeRuns;
+  }
+  return payload;
+};
+
+const submitPick = async (gamePk, pick, userUuid, nickname, date) => {
+  const r = await fetch(`${OUTCOMES_API}/picks/${gamePk}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userUuid, nickname, pick, date, season: date.slice(0, 4) }),
+  });
+  return r.json();
+};
+
+const fetchGamePicks = async (gamePk, userUuid) => {
+  try {
+    const r = await fetch(`${OUTCOMES_API}/picks/${gamePk}?userUuid=${userUuid}`);
+    return r.json();
+  } catch {
+    return { nrfiCount: 0, yrfiCount: 0, userPick: null };
+  }
+};
+
 const saveOutcome = async (game, predictedScore, predictedGrade, season) => {
   try {
     await fetch(`${OUTCOMES_API}/outcomes/${game.gamePk}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        season,
-        date: game.gameIso?.slice(0, 10),
-        homeTeam: game.homeTeam,
-        awayTeam: game.awayTeam,
-        venue: game.venue,
-        homePitcher: game.homePitcher,
-        awayPitcher: game.awayPitcher,
-        homeERA: game.homeERA,
-        awayERA: game.awayERA,
-        homeWHIP: game.homeWHIP,
-        awayWHIP: game.awayWHIP,
-        parkFactor: getPF(game.venue),
-        weatherDelta: calcWeatherDelta(game.weather),
-        predictedScore,
-        predictedGrade,
-      }),
+      body: JSON.stringify(buildOutcomePayload(game, predictedScore, predictedGrade, season)),
     });
   } catch { /* non-critical, never block the UI */ }
 };
@@ -174,25 +216,7 @@ const recordResult = async (gamePk, firstInning, predictedScore, predictedGrade,
     await fetch(`${OUTCOMES_API}/outcomes/${gamePk}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        season,
-        date: gameData.gameIso?.slice(0, 10),
-        homeTeam: gameData.homeTeam,
-        awayTeam: gameData.awayTeam,
-        venue: gameData.venue,
-        homePitcher: gameData.homePitcher,
-        awayPitcher: gameData.awayPitcher,
-        homeERA: gameData.homeERA,
-        awayERA: gameData.awayERA,
-        homeWHIP: gameData.homeWHIP,
-        awayWHIP: gameData.awayWHIP,
-        parkFactor: getPF(gameData.venue),
-        weatherDelta: calcWeatherDelta(gameData.weather),
-        predictedScore,
-        predictedGrade,
-        actualNRFI: firstInning.nrfi,
-        totalRuns: firstInning.totalRuns,
-      }),
+      body: JSON.stringify(buildOutcomePayload(gameData, predictedScore, predictedGrade, season, firstInning)),
     });
   } catch { /* non-critical */ }
 };
@@ -250,7 +274,10 @@ const ChatPanel = ({ date, nickname, onChangeNickname }) => {
     const ws = new WebSocket(`${CHAT_WS}?date=${date}`);
     wsRef.current = ws;
 
-    ws.onopen    = () => setStatus("open");
+    ws.onopen    = () => {
+      setStatus("open");
+      ws.send(JSON.stringify({ action: "getHistory", date }));
+    };
     ws.onclose   = () => setStatus("closed");
     ws.onerror   = () => setStatus("closed");
     ws.onmessage = (e) => {
@@ -380,22 +407,24 @@ const fetchFirstInningResult = async (gamePk) => {
 };
 
 const fetchPitcherStats = async (personId, season) => {
-  try {
-    const r = await fetch(
-      `${MLB_API}/people/${personId}/stats?stats=season&group=pitching&season=${season}`
-    );
-    if (!r.ok) return null;
-    const d = await r.json();
-    const splits = d.stats?.[0]?.splits;
-    if (!splits?.length) return null;
-    const stat = splits[splits.length - 1].stat;
-    return {
-      era:  stat.era  != null ? parseFloat(stat.era)  : null,
-      whip: stat.whip != null ? parseFloat(stat.whip) : null,
-    };
-  } catch {
-    return null;
-  }
+  const tryFetch = async (s) => {
+    try {
+      const r = await fetch(
+        `${MLB_API}/people/${personId}/stats?stats=season&group=pitching&season=${s}`
+      );
+      if (!r.ok) return null;
+      const d = await r.json();
+      const splits = d.stats?.[0]?.splits;
+      if (!splits?.length) return null;
+      const stat = splits[splits.length - 1].stat;
+      const era  = stat.era  != null ? parseFloat(stat.era)  : null;
+      const whip = stat.whip != null ? parseFloat(stat.whip) : null;
+      if (era == null && whip == null) return null;
+      return { era, whip, statSeason: s };
+    } catch { return null; }
+  };
+  // Try current season first; fall back to prior season (covers Opening Day)
+  return (await tryFetch(season)) ?? (await tryFetch(String(parseInt(season) - 1)));
 };
 
 const formatGameTime = (isoString) => {
@@ -414,7 +443,7 @@ const Spinner = ({ msg }) => (
   </div>
 );
 
-const PRow = ({ side, name, era, whip, team }) => {
+const PRow = ({ side, name, era, whip, team, priorSeason }) => {
   const dot = side === "AWAY" ? "#4a9eff" : "#00e5a0";
   const ec = era == null ? "#4a6080" : era <= 3.5 ? "#00e5a0" : era >= 5 ? "#ff4d6d" : "#f5c842";
   const wc = whip == null ? "#4a6080" : whip <= 1.1 ? "#00e5a0" : whip >= 1.5 ? "#ff4d6d" : "#f5c842";
@@ -422,7 +451,10 @@ const PRow = ({ side, name, era, whip, team }) => {
     <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:"1px solid #0e1822"}}>
       <div style={{width:6,height:6,borderRadius:"50%",background:dot,flexShrink:0}}/>
       <div style={{flex:1}}>
-        <div style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#4a6080",letterSpacing:1}}>{side} · {team}</div>
+        <div style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#4a6080",letterSpacing:1,display:"flex",alignItems:"center",gap:6}}>
+          {side} · {team}
+          {priorSeason && <span style={{background:"#f5c84220",color:"#f5c842",border:"1px solid #f5c84240",borderRadius:4,padding:"0 4px",fontSize:7,letterSpacing:1}}>{priorSeason} STATS</span>}
+        </div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:3}}>
           <span style={{fontFamily:"'DM Sans',sans-serif",fontSize:13,color:"#c8d8e8",fontWeight:600}}>{name || "TBD"}</span>
           <div style={{display:"flex",gap:12}}>
@@ -467,7 +499,61 @@ const FirstInningBanner = ({ result }) => {
   );
 };
 
-const Card = ({ game, idx }) => {
+const CrowdPickSection = ({ gamePk, gameState, crowdPick, onPick }) => {
+  const canPick = gameState !== 'Live' && gameState !== 'Final';
+  const { nrfiCount = 0, yrfiCount = 0, userPick = null } = crowdPick ?? {};
+  const total = nrfiCount + yrfiCount;
+  const nrfiPct = total > 0 ? Math.round(nrfiCount / total * 100) : 50;
+  const yrfiPct = 100 - nrfiPct;
+
+  return (
+    <div style={{marginTop:14,borderTop:"1px solid #0e1822",paddingTop:12}}>
+      <div style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",letterSpacing:1,marginBottom:8}}>
+        CROWD PICK{total > 0 ? ` · ${total} VOTE${total !== 1 ? 'S' : ''}` : ' · BE THE FIRST'}
+      </div>
+
+      {/* Pick buttons */}
+      <div style={{display:"flex",gap:8,marginBottom:total > 0 ? 10 : 0}}>
+        {['NRFI','YRFI'].map(pick => {
+          const isSelected = userPick === pick;
+          const color = pick === 'NRFI' ? '#00e5a0' : '#ff4d6d';
+          return (
+            <button
+              key={pick}
+              onClick={() => canPick && onPick(gamePk, pick)}
+              disabled={!canPick}
+              style={{flex:1,padding:"7px 0",background:isSelected?`${color}20`:"#0a1520",border:`1px solid ${isSelected?color:canPick?"#1a2e42":"#0e1822"}`,borderRadius:7,color:isSelected?color:canPick?"#8899aa":"#2a4060",fontFamily:"'Space Mono',monospace",fontSize:11,fontWeight:700,letterSpacing:2,cursor:canPick?"pointer":"not-allowed",transition:"all .15s"}}
+            >
+              {pick}{isSelected ? ' ✓' : ''}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Crowd bar */}
+      {total > 0 && (
+        <div>
+          <div style={{display:"flex",height:5,borderRadius:3,overflow:"hidden",marginBottom:5}}>
+            <div style={{width:`${nrfiPct}%`,background:"#00e5a0",transition:"width .3s"}}/>
+            <div style={{width:`${yrfiPct}%`,background:"#ff4d6d",transition:"width .3s"}}/>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between"}}>
+            <span style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#00e5a0"}}>{nrfiPct}% NRFI</span>
+            <span style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#ff4d6d"}}>{yrfiPct}% YRFI</span>
+          </div>
+        </div>
+      )}
+
+      {!canPick && (
+        <div style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#2a4060",letterSpacing:1,textAlign:"center",marginTop:6}}>
+          PICKS LOCKED · GAME IN PROGRESS
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Card = ({ game, idx, crowdPick, onPick }) => {
   const pf = getPF(game.venue);
   const weatherDelta = calcWeatherDelta(game.weather);
   const nr = nrfiGrade({ homeERA:game.homeERA, awayERA:game.awayERA, homeWHIP:game.homeWHIP, awayWHIP:game.awayWHIP, pf, weatherDelta });
@@ -512,8 +598,8 @@ const Card = ({ game, idx }) => {
       </div>
 
       <div style={{marginBottom:14}}>
-        <PRow side="AWAY" name={game.awayPitcher} era={game.awayERA} whip={game.awayWHIP} team={game.awayTeam}/>
-        <PRow side="HOME" name={game.homePitcher} era={game.homeERA} whip={game.homeWHIP} team={game.homeTeam}/>
+        <PRow side="AWAY" name={game.awayPitcher} era={game.awayERA} whip={game.awayWHIP} team={game.awayTeam} priorSeason={game.awayStatSeason !== String(game.gameIso?.slice(0,4)) ? game.awayStatSeason : null}/>
+        <PRow side="HOME" name={game.homePitcher} era={game.homeERA} whip={game.homeWHIP} team={game.homeTeam} priorSeason={game.homeStatSeason !== String(game.gameIso?.slice(0,4)) ? game.homeStatSeason : null}/>
       </div>
 
       {/* Chips row */}
@@ -529,6 +615,166 @@ const Card = ({ game, idx }) => {
         {wx && !wx.isIndoor && wx.precipPct != null && wx.precipPct >= 40 &&
           <Chip label={`${wx.precipPct}% RAIN`} color="#f5c842"/>}
       </div>
+
+      <CrowdPickSection
+        gamePk={game.gamePk}
+        gameState={game.gameState}
+        crowdPick={crowdPick}
+        onPick={onPick}
+      />
+    </div>
+  );
+};
+
+// ── Model Stats Panel ─────────────────────────────────────────────────────────
+const GRADE_META = {
+  A: { c: "#00e5a0", l: "Strong NRFI", range: "score ≥ 75" },
+  B: { c: "#f5c842", l: "Lean NRFI",   range: "score 58–74" },
+  C: { c: "#ff9f43", l: "Toss-Up",     range: "score 42–57" },
+  D: { c: "#ff4d6d", l: "Risky NRFI",  range: "score < 42"  },
+};
+
+const ModelStatsPanel = ({ season }) => {
+  const [records,      setRecords]      = useState(null);
+  const [picksSummary, setPicksSummary] = useState(null);
+  const [loading,      setLoading]      = useState(true);
+
+  useEffect(() => {
+    Promise.all([
+      fetch(`${OUTCOMES_API}/outcomes?season=${season}`).then(r => r.json()),
+      fetch(`${OUTCOMES_API}/picks?season=${season}`).then(r => r.json()).catch(() => []),
+    ]).then(([items, picks]) => {
+      setRecords(items);
+      setPicksSummary(picks);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, [season]);
+
+  if (loading) return (
+    <div style={{padding:"14px 32px",background:"#0a1520",borderBottom:"1px solid #0e1f30",textAlign:"center"}}>
+      <span style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#4a6080",letterSpacing:2}}>LOADING MODEL DATA...</span>
+    </div>
+  );
+
+  // Only count regular season games (Opening Day is typically late March)
+  const regularSeason = (records ?? []).filter(r => r.date >= `${season}-03-25`);
+
+  const stats = { A:{nrfi:0,total:0}, B:{nrfi:0,total:0}, C:{nrfi:0,total:0}, D:{nrfi:0,total:0} };
+  let totalNRFI = 0;
+  regularSeason.forEach(r => {
+    const g = r.predictedGrade;
+    if (stats[g]) { stats[g].total++; if (r.actualNRFI) { stats[g].nrfi++; totalNRFI++; } }
+  });
+  const totalGames = regularSeason.length;
+  const baseline   = totalGames ? totalNRFI / totalGames : 0;
+
+  // Crowd pick accuracy per grade — join picks summary with outcomes
+  const crowd = { A:{nrfi:0,yrfi:0,correct:0,withResult:0}, B:{nrfi:0,yrfi:0,correct:0,withResult:0}, C:{nrfi:0,yrfi:0,correct:0,withResult:0}, D:{nrfi:0,yrfi:0,correct:0,withResult:0} };
+  if (picksSummary?.length && records?.length) {
+    const outcomeMap = Object.fromEntries(regularSeason.map(r => [String(r.gamePk), r]));
+    picksSummary.forEach(p => {
+      const outcome = outcomeMap[String(p.gamePk)];
+      if (!outcome?.predictedGrade) return;
+      const g = outcome.predictedGrade;
+      if (!crowd[g]) return;
+      crowd[g].nrfi += p.nrfiCount;
+      crowd[g].yrfi += p.yrfiCount;
+      if (outcome.actualNRFI != null) {
+        const picks = p.nrfiCount + p.yrfiCount;
+        crowd[g].withResult += picks;
+        crowd[g].correct += outcome.actualNRFI ? p.nrfiCount : p.yrfiCount;
+      }
+    });
+  }
+
+  return (
+    <div style={{background:"#0a1520",borderBottom:"1px solid #0e1f30",padding:"18px 32px"}}>
+      <div style={{maxWidth:1100,margin:"0 auto"}}>
+
+        {/* Header row */}
+        <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:14,flexWrap:"wrap"}}>
+          <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:3,color:"#e0eaf4"}}>MODEL PERFORMANCE</span>
+          {totalGames > 0 && <>
+            <span style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#4a6080",letterSpacing:1}}>{totalGames} GRADED GAMES</span>
+            <span style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#4a6080",letterSpacing:1}}>BASELINE NRFI {Math.round(baseline*100)}%</span>
+            <span style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#2a4060",letterSpacing:1,marginLeft:"auto"}}>↑ ABOVE BASELINE · ~ NEAR · ↓ BELOW</span>
+          </>}
+        </div>
+
+        {totalGames === 0 ? (
+          <div style={{textAlign:"center",padding:"20px 0",fontFamily:"'Space Mono',monospace",fontSize:10,color:"#2a4060",letterSpacing:1}}>
+            NO COMPLETED GAMES YET — DATA BUILDS UP DURING THE SEASON
+          </div>
+        ) : (
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:10}}>
+            {["A","B","C","D"].map(g => {
+              const { c, l, range } = GRADE_META[g];
+              const { nrfi, total } = stats[g];
+              const rate = total ? nrfi / total : null;
+              const diff = rate != null ? rate - baseline : null;
+              const trend      = diff == null ? null  : diff >  0.05 ? "↑" : diff < -0.05 ? "↓" : "~";
+              const trendColor = diff == null ? "#4a6080" : diff > 0.05 ? "#00e5a0" : diff < -0.05 ? "#ff4d6d" : "#f5c842";
+
+              const { nrfi: cNrfi, yrfi: cYrfi, correct: cCorrect, withResult: cWithResult } = crowd[g];
+              const cTotal = cNrfi + cYrfi;
+              const cNrfiPct = cTotal > 0 ? Math.round(cNrfi / cTotal * 100) : null;
+              const cAccuracy = cWithResult > 0 ? Math.round(cCorrect / cWithResult * 100) : null;
+
+              return (
+                <div key={g} style={{background:"#060f18",border:`1px solid ${c}20`,borderTop:`2px solid ${c}`,borderRadius:8,padding:"12px 14px"}}>
+                  {/* Grade label row */}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,color:c,lineHeight:1}}>{g}</span>
+                      <div>
+                        <div style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:c,letterSpacing:1}}>{l}</div>
+                        <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:"#2a4060",letterSpacing:1,marginTop:1}}>{range}</div>
+                      </div>
+                    </div>
+                    {trend && <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:trendColor,lineHeight:1}}>{trend}</span>}
+                  </div>
+
+                  {/* Model NRFI rate bar */}
+                  <div style={{height:4,background:"#1a2e42",borderRadius:2,marginBottom:10,overflow:"hidden"}}>
+                    <div style={{width:`${rate != null ? Math.round(rate*100) : 0}%`,height:"100%",background:c,borderRadius:2}}/>
+                  </div>
+
+                  {/* Big number + sample size */}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+                    <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,color:"#e0eaf4",lineHeight:1}}>
+                      {rate != null ? `${Math.round(rate*100)}%` : "—"}
+                    </span>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#4a6080"}}>{nrfi}/{total} NRFI</div>
+                      {total > 0 && total < 10 &&
+                        <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:"#2a4060",letterSpacing:1,marginTop:2}}>LOW SAMPLE</div>}
+                    </div>
+                  </div>
+
+                  {/* Crowd picks section */}
+                  {cTotal > 0 && (
+                    <div style={{borderTop:"1px solid #0e1822",paddingTop:8}}>
+                      <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:"#4a6080",letterSpacing:1,marginBottom:6}}>CROWD PICKS · {cTotal} VOTE{cTotal !== 1 ? 'S' : ''}</div>
+                      <div style={{display:"flex",height:4,borderRadius:2,overflow:"hidden",marginBottom:5}}>
+                        <div style={{width:`${cNrfiPct}%`,background:"#00e5a0",transition:"width .3s"}}/>
+                        <div style={{width:`${100 - cNrfiPct}%`,background:"#ff4d6d",transition:"width .3s"}}/>
+                      </div>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+                        <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#00e5a0"}}>{cNrfiPct}% NRFI</span>
+                        {cAccuracy != null && (
+                          <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:cAccuracy >= 55 ? "#00e5a0" : cAccuracy >= 45 ? "#f5c842" : "#ff4d6d"}}>
+                            {cAccuracy}% CORRECT
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -543,9 +789,11 @@ export default function App() {
   const [sortBy,   setSortBy]   = useState("grade");
   const [fetched,  setFetched]  = useState(false);
 
-  // ── Chat state ─────────────────────────────────────────────────────────────
+  // ── Chat + picks state ─────────────────────────────────────────────────────
   const [nickname,        setNickname]        = useState(() => localStorage.getItem("nrfi-nickname") || "");
   const [showNickPrompt,  setShowNickPrompt]  = useState(false);
+  const [crowdPicks,      setCrowdPicks]      = useState({});
+  const [pendingPick,     setPendingPick]     = useState(null); // { gamePk, pick } while waiting for nickname
 
   const load = useCallback(async (d) => {
     setLoading(true); setError(null); setGames([]); setFetched(false);
@@ -601,18 +849,31 @@ export default function App() {
       // ── Step 3: Merge ─────────────────────────────────────────────────────
       const enriched = gameList.map((g, i) => ({
         ...g,
-        awayERA:      statsMap[g.awayPitcherId]?.era  ?? null,
-        awayWHIP:     statsMap[g.awayPitcherId]?.whip ?? null,
-        homeERA:      statsMap[g.homePitcherId]?.era  ?? null,
-        homeWHIP:     statsMap[g.homePitcherId]?.whip ?? null,
-        weather:      weatherResults[i],
-        firstInning:  firstInningResults[i],
+        awayERA:       statsMap[g.awayPitcherId]?.era        ?? null,
+        awayWHIP:      statsMap[g.awayPitcherId]?.whip       ?? null,
+        homeERA:       statsMap[g.homePitcherId]?.era        ?? null,
+        homeWHIP:      statsMap[g.homePitcherId]?.whip       ?? null,
+        awayStatSeason: statsMap[g.awayPitcherId]?.statSeason ?? null,
+        homeStatSeason: statsMap[g.homePitcherId]?.statSeason ?? null,
+        weather:       weatherResults[i],
+        firstInning:   firstInningResults[i],
       }));
 
       setGames(enriched);
       setFetched(true);
 
-      // ── Step 4: Persist to DynamoDB (fire-and-forget) ─────────────────────
+      // ── Step 4: Persist to DynamoDB + fetch crowd picks (fire-and-forget) ───
+      const uuid = getUserUuid();
+      const picksResults = await Promise.allSettled(
+        enriched.map(g => fetchGamePicks(g.gamePk, uuid))
+      );
+      const picksMap = {};
+      enriched.forEach((g, i) => {
+        const r = picksResults[i];
+        picksMap[String(g.gamePk)] = r.status === 'fulfilled' ? r.value : { nrfiCount: 0, yrfiCount: 0, userPick: null };
+      });
+      setCrowdPicks(picksMap);
+
       enriched.forEach((g) => {
         const pf = getPF(g.venue);
         const wd = calcWeatherDelta(g.weather);
@@ -633,6 +894,20 @@ export default function App() {
       setLoading(false); setStatus("");
     }
   }, []);
+
+  const handlePick = useCallback(async (gamePk, pick) => {
+    const uuid = getUserUuid();
+    const nick = nickname || localStorage.getItem("nrfi-nickname") || "";
+    if (!nick) {
+      setPendingPick({ gamePk, pick });
+      setShowNickPrompt(true);
+      return;
+    }
+    try {
+      const data = await submitPick(gamePk, pick, uuid, nick, date);
+      setCrowdPicks(prev => ({ ...prev, [String(gamePk)]: data }));
+    } catch { /* non-critical */ }
+  }, [nickname, date]);
 
   const gradeOf = (g) => {
     const pf = getPF(g.venue);
@@ -657,6 +932,12 @@ export default function App() {
         *{box-sizing:border-box;margin:0;padding:0;}
         ::-webkit-scrollbar{width:4px;}::-webkit-scrollbar-track{background:#060f18;}::-webkit-scrollbar-thumb{background:#1a2e42;border-radius:2px;}
         input[type=date]::-webkit-calendar-picker-indicator{filter:invert(.4);cursor:pointer;}
+        .body-layout{display:flex;flex-direction:row;gap:20px;align-items:flex-start;max-width:1400px;margin:32px auto 0;padding:0 24px;}
+        .chat-sidebar{width:320px;flex-shrink:0;position:sticky;top:90px;height:calc(100vh - 110px);}
+        @media(max-width:768px){
+          .body-layout{flex-direction:column;}
+          .chat-sidebar{width:100%;position:static;height:420px;}
+        }
       `}</style>
 
       {/* Header */}
@@ -664,9 +945,9 @@ export default function App() {
         <div style={{maxWidth:1100,margin:"0 auto"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:16}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <div style={{width:36,height:36,borderRadius:10,background:"linear-gradient(135deg,#00e5a0,#00bfff)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700,color:"#060f18"}}>N</div>
+              <img src={bennyLogo} alt="NRFI Benny" style={{width:52,height:52,borderRadius:10,objectFit:"cover"}}/>
               <div>
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:4,color:"#e0eaf4"}}>NRFI TRACKER</div>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:4,color:"#e0eaf4"}}>NRFI BENNY</div>
                 <div style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#4a6080",letterSpacing:2}}>NO RUN FIRST INNING · MLB ANALYSIS</div>
               </div>
             </div>
@@ -703,17 +984,27 @@ export default function App() {
         </div>
       </div>
 
+      {/* Model stats panel */}
+      <ModelStatsPanel season={date.slice(0, 4)}/>
+
       {/* Nickname prompt — shown on first chat or when changing name */}
       {showNickPrompt && (
         <NicknamePrompt onSave={(n) => {
           localStorage.setItem("nrfi-nickname", n);
           setNickname(n);
           setShowNickPrompt(false);
+          if (pendingPick) {
+            const { gamePk, pick } = pendingPick;
+            setPendingPick(null);
+            submitPick(gamePk, pick, getUserUuid(), n, date)
+              .then(data => setCrowdPicks(prev => ({ ...prev, [String(gamePk)]: data })))
+              .catch(() => {});
+          }
         }}/>
       )}
 
       {/* Body */}
-      <div style={{maxWidth:1400,margin:"32px auto 0",padding:"0 24px",display:"flex",gap:20,alignItems:"flex-start"}}>
+      <div className="body-layout">
         {/* Main content column */}
         <div style={{flex:1,minWidth:0}}>
         {!loading && !fetched && !error && (
@@ -757,14 +1048,14 @@ export default function App() {
         )}
         {!loading && sorted.length > 0 && (
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:20}}>
-            {sorted.map((g, i) => <Card key={g.id || i} game={g} idx={i}/>)}
+            {sorted.map((g, i) => <Card key={g.id || i} game={g} idx={i} crowdPick={crowdPicks[String(g.gamePk)]} onPick={handlePick}/>)}
           </div>
         )}
         </div>{/* end main content column */}
 
         {/* Chat sidebar — visible once a date is selected */}
         {(fetched || loading) && (
-          <div style={{width:320,flexShrink:0,position:"sticky",top:90,height:"calc(100vh - 110px)"}}>
+          <div className="chat-sidebar">
             <ChatPanel
               date={date}
               nickname={nickname || "Anonymous"}

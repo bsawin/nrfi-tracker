@@ -28,11 +28,14 @@ const post = async (apigw, connectionId, payload) => {
     await apigw.send(
       new PostToConnectionCommand({
         ConnectionId: connectionId,
-        Data: JSON.stringify(payload),
+        Data: Buffer.from(JSON.stringify(payload)),
       })
     );
+    console.log(`post OK → ${connectionId}`);
   } catch (err) {
-    if (err.$metadata?.httpStatusCode === 410) {
+    const status = err.$metadata?.httpStatusCode;
+    console.error(`post ERR ${status} → ${connectionId}:`, err.message);
+    if (status === 410) {
       await dynamo.send(
         new DeleteCommand({ TableName: CONN_TABLE, Key: { connectionId } })
       );
@@ -51,22 +54,25 @@ const broadcast = async (apigw, date, payload) => {
       ExpressionAttributeValues: { ":d": date },
     })
   );
-  await Promise.all(
-    (result.Items ?? []).map((c) => post(apigw, c.connectionId, payload))
-  );
+  const conns = result.Items ?? [];
+  console.log(`broadcast date=${date} → ${conns.length} connection(s)`);
+  await Promise.all(conns.map((c) => post(apigw, c.connectionId, payload)));
 };
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 exports.handler = async (event) => {
   const { connectionId, routeKey, domainName, stage } = event.requestContext;
+  console.log(`routeKey=${routeKey} connectionId=${connectionId}`);
   const apigw = makeApigw(domainName, stage);
 
   // ── $connect ──────────────────────────────────────────────────────────────
   if (routeKey === "$connect") {
     const date = event.queryStringParameters?.date ??
       new Date().toISOString().slice(0, 10);
+    console.log(`$connect date=${date}`);
 
-    // Save connection
+    // Save connection — do NOT post back here; API GW won't deliver until
+    // after $connect returns 200. Client will send getHistory once onopen fires.
     await dynamo.send(
       new PutCommand({
         TableName: CONN_TABLE,
@@ -74,28 +80,10 @@ exports.handler = async (event) => {
           connectionId,
           date,
           connectedAt: nowIso(),
-          ttl: ttlSec(1), // connections auto-expire after 24 h
+          ttl: ttlSec(1),
         },
       })
     );
-
-    // Send chat history for this date (last MSG_LIMIT messages, oldest first)
-    const history = await dynamo.send(
-      new QueryCommand({
-        TableName: CHAT_TABLE,
-        KeyConditionExpression: "#d = :d",
-        ExpressionAttributeNames: { "#d": "date" },
-        ExpressionAttributeValues: { ":d": date },
-        ScanIndexForward: false, // newest first so Limit grabs most recent
-        Limit: MSG_LIMIT,
-      })
-    );
-
-    await post(apigw, connectionId, {
-      type: "history",
-      messages: (history.Items ?? []).reverse(), // back to chronological order
-    });
-
     return { statusCode: 200 };
   }
 
@@ -107,12 +95,38 @@ exports.handler = async (event) => {
     return { statusCode: 200 };
   }
 
-  // ── sendMessage ───────────────────────────────────────────────────────────
+  // ── All other routes — parse body ─────────────────────────────────────────
   let body;
   try { body = JSON.parse(event.body ?? "{}"); }
   catch { return { statusCode: 400 }; }
 
+  // ── getHistory ────────────────────────────────────────────────────────────
+  if (routeKey === "getHistory") {
+    const date = body.date ?? new Date().toISOString().slice(0, 10);
+    console.log(`getHistory date=${date}`);
+
+    const history = await dynamo.send(
+      new QueryCommand({
+        TableName: CHAT_TABLE,
+        KeyConditionExpression: "#d = :d",
+        ExpressionAttributeNames: { "#d": "date" },
+        ExpressionAttributeValues: { ":d": date },
+        ScanIndexForward: false,
+        Limit: MSG_LIMIT,
+      })
+    );
+    console.log(`history items=${history.Items?.length ?? 0}`);
+
+    await post(apigw, connectionId, {
+      type: "history",
+      messages: (history.Items ?? []).reverse(),
+    });
+    return { statusCode: 200 };
+  }
+
+  // ── sendMessage ───────────────────────────────────────────────────────────
   const { date, message, nickname, userUuid } = body;
+  console.log(`sendMessage date=${date} nickname=${nickname} msg=${message?.slice(0, 30)}`);
   if (!date || !message?.trim()) return { statusCode: 400 };
 
   const msgId   = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
