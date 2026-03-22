@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Card Mockup</title>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #060f18; font-family: 'DM Sans', sans-serif; padding: 40px 24px; }
+    h2 { font-family: 'Space Mono', monospace; font-size: 10px; color: #4a6080; letter-spacing: 2px; margin-bottom: 20px; }
+
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 24px; max-width: 800px; }
+
+    .card {
+      background: linear-gradient(145deg, #0d1f30, #0a1520);
+      border: 1px solid #1a2e42;
+      border-top: 3px solid #00e5a0;
+      border-radius: 12px;
+      padding: 20px 22px;
+    }
+
+    /* ── Matchup header ── */
+    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; gap: 12px; }
+    .matchup-name { font-family: 'Bebas Neue', sans-serif; font-size: 20px; letter-spacing: 2px; color: #e0eaf4; line-height: 1.15; }
+    .matchup-sub  { font-family: 'Space Mono', monospace; font-size: 9px; color: #4a6080; margin-top: 4px; letter-spacing: 1px; }
+    .grade-badge  { display: flex; flex-direction: column; align-items: center; background: #00e5a015; border: 1px solid #00e5a040; border-radius: 10px; padding: 8px 14px; min-width: 68px; flex-shrink: 0; }
+    .grade-letter { font-family: 'Bebas Neue', sans-serif; font-size: 36px; color: #00e5a0; line-height: 1; }
+    .grade-label  { font-family: 'Space Mono', monospace; font-size: 8px; color: #00e5a0; letter-spacing: 1px; margin-top: 2px; }
+    .grade-bar    { margin-top: 5px; width: 100%; height: 3px; border-radius: 2px; background: #0a1520; overflow: hidden; }
+    .grade-fill   { height: 100%; background: #00e5a0; border-radius: 2px; }
+    .grade-score  { font-family: 'Space Mono', monospace; font-size: 8px; color: #4a6080; margin-top: 2px; }
+
+    /* ── Pitcher rows ── */
+    .pitcher-row  { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #0e1822; }
+    .dot          { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .p-side       { font-family: 'Space Mono', monospace; font-size: 9px; color: #4a6080; letter-spacing: 1px; }
+    .p-name       { font-family: 'DM Sans', sans-serif; font-size: 13px; color: #c8d8e8; font-weight: 600; margin-top: 2px; }
+    .p-stats      { display: flex; gap: 10px; margin-top: 2px; }
+    .stat-label   { font-family: 'Space Mono', monospace; font-size: 11px; color: #8899aa; }
+
+    /* ── NEW: Lineup quality row ── */
+    .lineup-row   { display: flex; gap: 10px; padding: 8px 0 4px; border-bottom: 1px solid #0e1822; }
+    .lineup-side  { flex: 1; }
+    .lineup-tag   { font-family: 'Space Mono', monospace; font-size: 7px; color: #4a6080; letter-spacing: 1px; margin-bottom: 4px; }
+    .lineup-stats { display: flex; gap: 10px; }
+
+    /* ── NEW: Score breakdown ── */
+    .breakdown    { margin: 12px 0; padding: 10px 12px; background: #060f18; border: 1px solid #0e1822; border-radius: 8px; }
+    .bd-title     { font-family: 'Space Mono', monospace; font-size: 7px; color: #4a6080; letter-spacing: 1px; margin-bottom: 8px; }
+    .bd-row       { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+    .bd-label     { font-family: 'Space Mono', monospace; font-size: 8px; color: #4a6080; width: 80px; flex-shrink: 0; }
+    .bd-track     { flex: 1; height: 5px; background: #1a2e42; border-radius: 3px; overflow: hidden; }
+    .bd-fill      { height: 100%; border-radius: 3px; }
+    .bd-val       { font-family: 'Space Mono', monospace; font-size: 8px; width: 32px; text-align: right; flex-shrink: 0; }
+    .bd-total-row { display: flex; justify-content: space-between; align-items: baseline; margin-top: 8px; padding-top: 6px; border-top: 1px solid #0e1822; }
+    .bd-total-lbl { font-family: 'Space Mono', monospace; font-size: 8px; color: #4a6080; letter-spacing: 1px; }
+    .bd-total-val { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: #00e5a0; line-height: 1; }
+
+    /* ── Chips ── */
+    .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .chip  { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 1px; padding: 3px 10px; border-radius: 20px; }
+
+    /* ── Crowd pick ── */
+    .crowd { margin-top: 14px; border-top: 1px solid #0e1822; padding-top: 12px; }
+    .crowd-title { font-family: 'Space Mono', monospace; font-size: 8px; color: #4a6080; letter-spacing: 1px; margin-bottom: 8px; }
+    .pick-btns   { display: flex; gap: 8px; margin-bottom: 10px; }
+    .pick-btn    { flex: 1; padding: 7px 0; border-radius: 7px; font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700; letter-spacing: 2px; cursor: pointer; text-align: center; }
+    .crowd-bar   { display: flex; height: 5px; border-radius: 3px; overflow: hidden; margin-bottom: 5px; }
+    .crowd-pcts  { display: flex; justify-content: space-between; }
+    .crowd-pct   { font-family: 'Space Mono', monospace; font-size: 9px; }
+
+    /* toggle */
+    .toggle { display: flex; gap: 12px; margin-bottom: 24px; }
+    .toggle button { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 1px; padding: 6px 16px; border-radius: 6px; cursor: pointer; border: 1px solid #1a2e42; background: #0d1f30; color: #4a6080; }
+    .toggle button.active { background: #00e5a020; border-color: #00e5a0; color: #00e5a0; }
+  </style>
+</head>
+<body>
+
+<h2>CARD MOCKUP — TOGGLE TO COMPARE</h2>
+<div class="toggle">
+  <button class="active" onclick="show('current')">CURRENT CARD</button>
+  <button onclick="show('new')">PROPOSED CARD</button>
+</div>
+
+<div class="cards">
+
+  <!-- ══════════════════════ CURRENT CARD ══════════════════════ -->
+  <div class="card" id="current">
+    <div class="header">
+      <div style="flex:1;min-width:0">
+        <div class="matchup-name">Dodgers <span style="color:#2a4a6a">@</span> Yankees</div>
+        <div class="matchup-sub">Yankee Stadium · 1:05 PM ET</div>
+      </div>
+      <div class="grade-badge">
+        <div class="grade-letter">A</div>
+        <div class="grade-label">Strong NRFI</div>
+        <div class="grade-bar"><div class="grade-fill" style="width:78%"></div></div>
+        <div class="grade-score">78/100</div>
+      </div>
+    </div>
+
+    <!-- Pitchers -->
+    <div style="margin-bottom:14px">
+      <div class="pitcher-row">
+        <div class="dot" style="background:#4a9eff"></div>
+        <div style="flex:1">
+          <div class="p-side">AWAY · Dodgers</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px">
+            <div class="p-name">Yoshinobu Yamamoto</div>
+            <div class="p-stats">
+              <span class="stat-label">ERA <span style="color:#00e5a0">2.54</span></span>
+              <span class="stat-label">WHIP <span style="color:#00e5a0">0.94</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="pitcher-row">
+        <div class="dot" style="background:#00e5a0"></div>
+        <div style="flex:1">
+          <div class="p-side">HOME · Yankees</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px">
+            <div class="p-name">Gerrit Cole</div>
+            <div class="p-stats">
+              <span class="stat-label">ERA <span style="color:#00e5a0">3.12</span></span>
+              <span class="stat-label">WHIP <span style="color:#f5c842">1.08</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chips -->
+    <div class="chips">
+      <div class="chip" style="background:#4a608015;color:#4a6080;border:1px solid #4a608035">PARK +6%</div>
+      <div class="chip" style="background:#4a608015;color:#4a6080;border:1px solid #4a608035">AVG ERA 2.83</div>
+      <div class="chip" style="background:#4a9eff15;color:#4a9eff;border:1px solid #4a9eff35">48°F</div>
+      <div class="chip" style="background:#00e5a015;color:#00e5a0;border:1px solid #00e5a035">12mph IN</div>
+    </div>
+
+    <!-- Crowd pick -->
+    <div class="crowd">
+      <div class="crowd-title">CROWD PICK · 14 VOTES</div>
+      <div class="pick-btns">
+        <div class="pick-btn" style="background:#00e5a020;border:1px solid #00e5a0;color:#00e5a0">NRFI ✓</div>
+        <div class="pick-btn" style="background:#0a1520;border:1px solid #1a2e42;color:#8899aa">YRFI</div>
+      </div>
+      <div class="crowd-bar">
+        <div style="width:71%;background:#00e5a0"></div>
+        <div style="width:29%;background:#ff4d6d"></div>
+      </div>
+      <div class="crowd-pcts">
+        <span class="crowd-pct" style="color:#00e5a0">71% NRFI</span>
+        <span class="crowd-pct" style="color:#ff4d6d">29% YRFI</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════ PROPOSED CARD ══════════════════════ -->
+  <div class="card" id="new" style="display:none">
+    <div class="header">
+      <div style="flex:1;min-width:0">
+        <div class="matchup-name">Dodgers <span style="color:#2a4a6a">@</span> Yankees</div>
+        <div class="matchup-sub">Yankee Stadium · 1:05 PM ET</div>
+      </div>
+      <div class="grade-badge">
+        <div class="grade-letter">A</div>
+        <div class="grade-label">Strong NRFI</div>
+        <div class="grade-bar"><div class="grade-fill" style="width:78%"></div></div>
+        <div class="grade-score">78/100</div>
+      </div>
+    </div>
+
+    <!-- Pitchers — same as before -->
+    <div style="margin-bottom:0">
+      <div class="pitcher-row">
+        <div class="dot" style="background:#4a9eff"></div>
+        <div style="flex:1">
+          <div class="p-side">AWAY · Dodgers</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px">
+            <div class="p-name">Yoshinobu Yamamoto</div>
+            <div class="p-stats">
+              <span class="stat-label">ERA <span style="color:#00e5a0">2.54</span></span>
+              <span class="stat-label">WHIP <span style="color:#00e5a0">0.94</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="pitcher-row" style="border-bottom:none">
+        <div class="dot" style="background:#00e5a0"></div>
+        <div style="flex:1">
+          <div class="p-side">HOME · Yankees</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:3px">
+            <div class="p-name">Gerrit Cole</div>
+            <div class="p-stats">
+              <span class="stat-label">ERA <span style="color:#00e5a0">3.12</span></span>
+              <span class="stat-label">WHIP <span style="color:#f5c842">1.08</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NEW: Lineup quality row -->
+    <div class="lineup-row">
+      <div class="lineup-side" style="padding-left:16px">
+        <div class="lineup-tag">DODGERS LINEUP</div>
+        <div class="lineup-stats">
+          <span class="stat-label" style="font-size:10px">OPS <span style="color:#ff4d6d">.798</span></span>
+          <span class="stat-label" style="font-size:10px">K% <span style="color:#00e5a0">23.1%</span></span>
+        </div>
+      </div>
+      <div style="width:1px;background:#0e1822;margin:2px 4px"></div>
+      <div class="lineup-side" style="padding-left:8px">
+        <div class="lineup-tag">YANKEES LINEUP</div>
+        <div class="lineup-stats">
+          <span class="stat-label" style="font-size:10px">OPS <span style="color:#f5c842">.741</span></span>
+          <span class="stat-label" style="font-size:10px">K% <span style="color:#00e5a0">24.8%</span></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- NEW: Score breakdown -->
+    <div class="breakdown">
+      <div class="bd-title">SCORE BREAKDOWN  ·  starts at 100</div>
+
+      <div class="bd-row">
+        <div class="bd-label">ERA penalty</div>
+        <div class="bd-track"><div class="bd-fill" style="width:18%;background:#ff4d6d"></div></div>
+        <div class="bd-val" style="color:#ff4d6d">−7.1</div>
+      </div>
+      <div class="bd-row">
+        <div class="bd-label">WHIP penalty</div>
+        <div class="bd-track"><div class="bd-fill" style="width:4%;background:#ff4d6d"></div></div>
+        <div class="bd-val" style="color:#ff4d6d">−1.2</div>
+      </div>
+      <div class="bd-row">
+        <div class="bd-label">Park penalty</div>
+        <div class="bd-track"><div class="bd-fill" style="width:6%;background:#ff9f43"></div></div>
+        <div class="bd-val" style="color:#ff9f43">−3.6</div>
+      </div>
+      <div class="bd-row">
+        <div class="bd-label">Weather</div>
+        <div class="bd-track"><div class="bd-fill" style="width:10%;background:#00e5a0"></div></div>
+        <div class="bd-val" style="color:#00e5a0">+9.9</div>
+      </div>
+
+      <div class="bd-total-row">
+        <div class="bd-total-lbl">FINAL SCORE</div>
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <div style="font-family:'Space Mono',monospace;font-size:9px;color:#4a6080">100 − 7.1 − 1.2 − 3.6 + 9.9 =</div>
+          <div class="bd-total-val">78</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chips — same -->
+    <div class="chips">
+      <div class="chip" style="background:#4a608015;color:#4a6080;border:1px solid #4a608035">PARK +6%</div>
+      <div class="chip" style="background:#4a608015;color:#4a6080;border:1px solid #4a608035">AVG ERA 2.83</div>
+      <div class="chip" style="background:#4a9eff15;color:#4a9eff;border:1px solid #4a9eff35">48°F</div>
+      <div class="chip" style="background:#00e5a015;color:#00e5a0;border:1px solid #00e5a035">12mph IN</div>
+    </div>
+
+    <!-- Crowd pick — same -->
+    <div class="crowd">
+      <div class="crowd-title">CROWD PICK · 14 VOTES</div>
+      <div class="pick-btns">
+        <div class="pick-btn" style="background:#00e5a020;border:1px solid #00e5a0;color:#00e5a0">NRFI ✓</div>
+        <div class="pick-btn" style="background:#0a1520;border:1px solid #1a2e42;color:#8899aa">YRFI</div>
+      </div>
+      <div class="crowd-bar">
+        <div style="width:71%;background:#00e5a0"></div>
+        <div style="width:29%;background:#ff4d6d"></div>
+      </div>
+      <div class="crowd-pcts">
+        <span class="crowd-pct" style="color:#00e5a0">71% NRFI</span>
+        <span class="crowd-pct" style="color:#ff4d6d">29% YRFI</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  function show(id) {
+    document.getElementById('current').style.display = id === 'current' ? 'block' : 'none';
+    document.getElementById('new').style.display     = id === 'new'     ? 'block' : 'none';
+    document.querySelectorAll('.toggle button').forEach((b, i) => {
+      b.className = (i === 0 && id === 'current') || (i === 1 && id === 'new') ? 'active' : '';
+    });
+  }
+</script>
+</body>
+</html>

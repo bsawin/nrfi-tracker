@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import bennyLogo from "./logo.png";
+import proLogo from "./logo.png";
 
 // ── Scoring ───────────────────────────────────────────────────────────────────
 const PARK_FACTORS = {
@@ -41,7 +41,7 @@ const STADIUM_DATA = [
   ["Globe Life",       { lat: 32.7473, lon: -97.0836,  cfBearing: 35,  indoor: true  }], // Arlington (retractable, usually closed)
   ["loanDepot",        { lat: 25.7781, lon: -80.2197,  cfBearing: 355, indoor: false }], // Miami (retractable)
   ["Citizens Bank",    { lat: 39.9061, lon: -75.1665,  cfBearing: 350, indoor: false }], // Philadelphia
-  ["Minute Maid",      { lat: 29.7573, lon: -95.3555,  cfBearing: 18,  indoor: false }], // Houston (retractable)
+  ["Daikin Park",      { lat: 29.7573, lon: -95.3555,  cfBearing: 18,  indoor: false }], // Houston (retractable, formerly Minute Maid)
   ["Guaranteed Rate",  { lat: 41.8300, lon: -87.6339,  cfBearing: 355, indoor: false }], // Chicago (Sox)
   ["Tropicana",        { lat: 27.7682, lon: -82.6534,  cfBearing: 0,   indoor: true  }], // Tampa (dome)
   ["Rogers Centre",    { lat: 43.6414, lon: -79.3894,  cfBearing: 20,  indoor: true  }], // Toronto (dome)
@@ -419,20 +419,24 @@ const fetchFirstInningResult = async (gamePk) => {
 };
 
 const fetchTeamStats = async (teamId, season) => {
-  try {
-    const r = await fetch(
-      `${MLB_API}/teams/${teamId}/stats?stats=season&group=hitting&season=${season}`
-    );
-    if (!r.ok) return null;
-    const d = await r.json();
-    const stat = d.stats?.[0]?.splits?.[0]?.stat;
-    if (!stat) return null;
-    const ops  = stat.ops  != null ? parseFloat(stat.ops)  : null;
-    const so   = stat.strikeOuts       ?? 0;
-    const pa   = stat.plateAppearances ?? 0;
-    const kPct = pa > 0 ? Math.round((so / pa) * 1000) / 10 : null;
-    return { ops, kPct };
-  } catch { return null; }
+  const tryFetch = async (yr) => {
+    try {
+      const r = await fetch(
+        `${MLB_API}/teams/${teamId}/stats?stats=season&group=hitting&season=${yr}`
+      );
+      if (!r.ok) return null;
+      const d = await r.json();
+      const stat = d.stats?.[0]?.splits?.[0]?.stat;
+      if (!stat || !stat.plateAppearances) return null;
+      const ops  = stat.ops  != null ? parseFloat(stat.ops)  : null;
+      const so   = stat.strikeOuts       ?? 0;
+      const pa   = stat.plateAppearances ?? 0;
+      const kPct = pa > 0 ? Math.round((so / pa) * 1000) / 10 : null;
+      return { ops, kPct };
+    } catch { return null; }
+  };
+  const result = await tryFetch(season);
+  return result ?? await tryFetch(Number(season) - 1);
 };
 
 const fetchPitcherStats = async (personId, season) => {
@@ -591,8 +595,9 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
   const pfc = pf > 1.05 ? "#ff4d6d" : pf < 0.97 ? "#00e5a0" : "#4a6080";
 
   const wx = game.weather;
+  const isIndoor = wx?.isIndoor ?? STADIUM_DATA.find(([k]) => game.venue?.toLowerCase().includes(k.toLowerCase()))?.[1]?.indoor ?? false;
   const windInfo = getWindInfo(wx);
-  const tempColor = wx && !wx.isIndoor && wx.tempF != null
+  const tempColor = wx && !isIndoor && wx.tempF != null
     ? (wx.tempF < 50 ? "#4a9eff" : wx.tempF > 85 ? "#ff9f43" : "#4a6080")
     : "#4a6080";
 
@@ -696,11 +701,11 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
       <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
         <Chip label={`PARK ${pf > 1 ? "+" : ""}${pfPct}%`} color={pfc}/>
         {avgERA && <Chip label={`AVG ERA ${avgERA}`} color="#4a6080"/>}
-        {wx?.isIndoor && <Chip label="DOME" color="#4a6080"/>}
-        {wx && !wx.isIndoor && wx.tempF != null &&
+        {isIndoor && <Chip label="🏟 INDOOR" color="#4a9eff"/>}
+        {!isIndoor && wx?.tempF != null &&
           <Chip label={`${Math.round(wx.tempF)}°F`} color={tempColor}/>}
-        {windInfo && <Chip label={windInfo.label} color={windInfo.color}/>}
-        {wx && !wx.isIndoor && wx.precipPct != null && wx.precipPct >= 40 &&
+        {!isIndoor && windInfo && <Chip label={windInfo.label} color={windInfo.color}/>}
+        {!isIndoor && wx?.precipPct != null && wx.precipPct >= 40 &&
           <Chip label={`${wx.precipPct}% RAIN`} color="#f5c842"/>}
       </div>
 
@@ -1044,9 +1049,9 @@ export default function App() {
         <div style={{maxWidth:1100,margin:"0 auto"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:16}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <img src={bennyLogo} alt="NRFI Benny" style={{width:52,height:52,borderRadius:10,objectFit:"cover"}}/>
+              <img src={proLogo} alt="NRFI Pro" style={{width:52,height:52,borderRadius:10,objectFit:"cover"}}/>
               <div>
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:4,color:"#e0eaf4"}}>NRFI BENNY</div>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:4,color:"#e0eaf4"}}>NRFI PRO</div>
                 <div style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#4a6080",letterSpacing:2}}>NO RUN FIRST INNING · MLB ANALYSIS</div>
               </div>
             </div>

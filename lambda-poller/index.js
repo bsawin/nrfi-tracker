@@ -51,7 +51,7 @@ const STADIUM_DATA = [
   ["Globe Life",        { lat: 32.7473, lon: -97.0836,  cfBearing: 35,  indoor: true  }],
   ["loanDepot",         { lat: 25.7781, lon: -80.2197,  cfBearing: 355, indoor: false }],
   ["Citizens Bank",     { lat: 39.9061, lon: -75.1665,  cfBearing: 350, indoor: false }],
-  ["Minute Maid",       { lat: 29.7573, lon: -95.3555,  cfBearing: 18,  indoor: false }],
+  ["Daikin Park",       { lat: 29.7573, lon: -95.3555,  cfBearing: 18,  indoor: false }],
   ["Guaranteed Rate",   { lat: 41.8300, lon: -87.6339,  cfBearing: 355, indoor: false }],
   ["Tropicana",         { lat: 27.7682, lon: -82.6534,  cfBearing: 0,   indoor: true  }],
   ["Rogers Centre",     { lat: 43.6414, lon: -79.3894,  cfBearing: 20,  indoor: true  }],
