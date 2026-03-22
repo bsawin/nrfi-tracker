@@ -145,7 +145,7 @@ const getWindInfo = (weather) => {
 };
 
 // ── Outcomes API (DynamoDB via Lambda) ───────────────────────────────────────
-const OUTCOMES_API = "https://q0jutr0ldh.execute-api.us-east-1.amazonaws.com";
+const OUTCOMES_API = "https://api.nrfipro.com";
 
 const buildOutcomePayload = (game, predictedScore, predictedGrade, season, firstInning = null) => {
   const wx  = game.weather;
