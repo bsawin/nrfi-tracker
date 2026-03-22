@@ -6,7 +6,9 @@ Tracks "No Run First Inning" (NRFI) betting angles for MLB games. For each day's
 ## Architecture
 - **Pure frontend React app** (Create React App) — no backend, no API keys needed
 - **Hosted**: S3 bucket `nrfi-tracker-app` + CloudFront distribution `E1JFGP2WTX58XO`
-- **Domain**: kuplootus.com (Route 53, ACM cert `459831d5-59fa-42c8-825c-bbe483790579`)
+- **Primary domain**: app.nrfipro.com — Route 53 (hosted zone `Z086398736YIIJINO32UT`), ACM cert `5cc9de0f-e4dd-4f91-9e19-935d6cca55d9`
+- **Redirects**: nrfipro.com + www.nrfipro.com → app.nrfipro.com via CloudFront distribution `E3YSAOWCV4FHH` + CloudFront Function `nrfipro-redirect-to-app`
+- **Legacy domain**: kuplootus.com still works (ACM cert `459831d5-59fa-42c8-825c-bbe483790579` still attached)
 - **GitHub**: https://github.com/bsawin/nrfi-tracker
 
 ## Data Sources (all free, no auth)
