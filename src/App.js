@@ -879,7 +879,7 @@ export default function App() {
   const [status,   setStatus]   = useState("");
   const [error,    setError]    = useState(null);
   const [date,     setDate]     = useState("2026-03-26");
-  const [sortBy,   setSortBy]   = useState("grade");
+  const sortBy = "grade";
   const [fetched,  setFetched]  = useState(false);
 
   // ── Chat + picks state ─────────────────────────────────────────────────────
@@ -887,8 +887,15 @@ export default function App() {
   const [showNickPrompt,  setShowNickPrompt]  = useState(false);
   const [crowdPicks,      setCrowdPicks]      = useState({});
   const [pendingPick,     setPendingPick]     = useState(null); // { gamePk, pick } while waiting for nickname
+  const gamesRef  = useRef(null);
+  const headerRef = useRef(null);
 
   const load = useCallback(async (d) => {
+    if (gamesRef.current) {
+      const headerHeight = headerRef.current?.offsetHeight ?? 0;
+      const top = gamesRef.current.getBoundingClientRect().top + window.scrollY - headerHeight;
+      window.scrollTo({ top: Math.max(0, top), behavior: "instant" });
+    }
     setLoading(true); setError(null); setGames([]); setFetched(false);
     const season = d.slice(0, 4);
 
@@ -1045,7 +1052,7 @@ export default function App() {
       `}</style>
 
       {/* Header */}
-      <div style={{background:"linear-gradient(180deg,#0a1c2e,#060f18)",borderBottom:"1px solid #0e1f30",padding:"28px 32px 20px",position:"sticky",top:0,zIndex:10}}>
+      <div ref={headerRef} style={{background:"linear-gradient(180deg,#0a1c2e,#060f18)",borderBottom:"1px solid #0e1f30",padding:"28px 32px 20px",position:"sticky",top:0,zIndex:10}}>
         <div style={{maxWidth:1100,margin:"0 auto"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:16}}>
             <div style={{display:"flex",alignItems:"center",gap:12}}>
@@ -1056,21 +1063,32 @@ export default function App() {
               </div>
             </div>
             <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,background:"#0d1f30",border:"1px solid #1a2e42",borderRadius:8,padding:"6px 12px"}}>
-                <span style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#4a6080",letterSpacing:1}}>DATE</span>
-                <input type="date" value={date} onChange={e => setDate(e.target.value)}
-                  style={{background:"transparent",border:"none",outline:"none",color:"#c8d8e8",fontFamily:"'Space Mono',monospace",fontSize:11,cursor:"pointer"}}/>
-              </div>
-              <div style={{display:"flex",background:"#0d1f30",border:"1px solid #1a2e42",borderRadius:8,overflow:"hidden"}}>
-                {["grade","time"].map(s => (
-                  <button key={s} onClick={() => setSortBy(s)} style={{padding:"6px 14px",background:sortBy===s?"#00e5a020":"transparent",border:"none",color:sortBy===s?"#00e5a0":"#4a6080",fontFamily:"'Space Mono',monospace",fontSize:10,letterSpacing:1,cursor:"pointer",textTransform:"uppercase",transition:"all .2s"}}>
-                    {s === "grade" ? "BY GRADE" : "BY TIME"}
-                  </button>
-                ))}
-              </div>
-              <button onClick={() => load(date)} disabled={loading} style={{padding:"7px 20px",background:loading?"#0d1f30":"linear-gradient(135deg,#00e5a0,#00bfff)",border:"none",borderRadius:8,color:loading?"#4a6080":"#060f18",fontFamily:"'Space Mono',monospace",fontSize:11,fontWeight:700,letterSpacing:1,cursor:loading?"not-allowed":"pointer",transition:"all .2s"}}>
-                {loading ? "LOADING..." : "LOAD GAMES"}
-              </button>
+              {(() => {
+                const toDateStr = (d) => d.toLocaleDateString("en-CA"); // YYYY-MM-DD
+                const offsetDay = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return toDateStr(d); };
+                const yesterday = offsetDay(-1), today = offsetDay(0), tomorrow = offsetDay(1);
+                const btnStyle = (active) => ({
+                  padding:"7px 16px", border:"none", borderRadius:8, cursor:"pointer",
+                  fontFamily:"'Space Mono',monospace", fontSize:10, fontWeight:700, letterSpacing:1,
+                  background: active ? "linear-gradient(135deg,#00e5a0,#00bfff)" : "#0d1f30",
+                  color: active ? "#060f18" : "#4a6080",
+                  outline: active ? "none" : "1px solid #1a2e42",
+                  transition:"all .2s",
+                });
+                return (
+                  <>
+                    <button style={btnStyle(date === yesterday)} onClick={() => { setDate(yesterday); load(yesterday); }}>YESTERDAY</button>
+                    <button style={btnStyle(date === today)}     onClick={() => { setDate(today);     load(today);     }}>TODAY</button>
+                    <button style={btnStyle(date === tomorrow)}  onClick={() => { setDate(tomorrow);  load(tomorrow);  }}>TOMORROW</button>
+                    <div style={{display:"flex",alignItems:"center",gap:8,background:"#0d1f30",border:"1px solid #1a2e42",borderRadius:8,padding:"6px 12px"}}>
+                      <span style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#4a6080",letterSpacing:1}}>DATE</span>
+                      <input type="date" value={date}
+                        onChange={e => { const v = e.target.value; setDate(v); if (v && v.length === 10) load(v); }}
+                        style={{background:"transparent",border:"none",outline:"none",color:"#c8d8e8",fontFamily:"'Space Mono',monospace",fontSize:11,cursor:"pointer"}}/>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           </div>
           {fetched && games.length > 0 && (
@@ -1108,7 +1126,7 @@ export default function App() {
       )}
 
       {/* Body */}
-      <div className="body-layout">
+      <div className="body-layout" ref={gamesRef}>
         {/* Main content column */}
         <div style={{flex:1,minWidth:0}}>
         {!loading && !fetched && !error && (
@@ -1116,6 +1134,8 @@ export default function App() {
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:52,color:"#0d1f30",letterSpacing:6,lineHeight:1}}>NRFI</div>
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"#1a3050",letterSpacing:4,marginBottom:8}}>TRACKER</div>
             <div style={{fontFamily:"'Space Mono',monospace",fontSize:11,color:"#2a4060",marginBottom:32,letterSpacing:1}}>SELECT A DATE · LOAD GAMES · BET SMARTER</div>
+            {/* TODO (by 2026-03-26): Replace hardcoded date buttons with dynamic yesterday/today/tomorrow
+                relative to the current date, so this works for any day of the season. */}
             <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
               <button onClick={() => { setDate("2026-03-25"); setTimeout(() => load("2026-03-25"), 50); }} style={{padding:"10px 24px",background:"#0d1f30",border:"1px solid #1a2e42",borderRadius:10,color:"#c8d8e8",fontFamily:"'Space Mono',monospace",fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>
                 MAR 25 (OPENING NIGHT)
