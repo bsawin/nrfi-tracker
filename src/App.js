@@ -154,6 +154,7 @@ const buildOutcomePayload = (game, predictedScore, predictedGrade, season, first
   const avgWHIP = ((game.homeWHIP ?? 1.3)  + (game.awayWHIP ?? 1.3))  / 2;
   const payload = {
     season,
+    gameType:       game.gameType ?? "R",
     date:           game.gameIso?.slice(0, 10),
     gameTime:       game.gameIso,
     homeTeam:       game.homeTeam,
@@ -749,8 +750,10 @@ const ModelStatsPanel = ({ season }) => {
     </div>
   );
 
-  // Only count regular season games (Opening Day is typically late March)
-  const regularSeason = (records ?? []).filter(r => r.date >= `${season}-03-25`);
+  // Only count regular season games: gameType "R" AND on/after Opening Night (Mar 25)
+  const regularSeason = (records ?? []).filter(r =>
+    (r.gameType === "R" || !r.gameType) && r.date >= `${season}-03-25`
+  );
 
   const stats = { A:{nrfi:0,total:0}, B:{nrfi:0,total:0}, C:{nrfi:0,total:0}, D:{nrfi:0,total:0} };
   let totalNRFI = 0;
@@ -878,7 +881,7 @@ export default function App() {
   const [loading,  setLoading]  = useState(false);
   const [status,   setStatus]   = useState("");
   const [error,    setError]    = useState(null);
-  const [date,     setDate]     = useState("2026-03-26");
+  const [date,     setDate]     = useState(() => new Date().toLocaleDateString("en-CA"));
   const sortBy = "grade";
   const [fetched,  setFetched]  = useState(false);
 
@@ -913,6 +916,7 @@ export default function App() {
         id: g.gamePk ?? i,
         gamePk: g.gamePk,
         gameState: g.status?.abstractGameState ?? "Preview", // "Preview" | "Live" | "Final"
+        gameType: g.gameType ?? "R", // "R"=regular, "S"=spring, "E"=exhibition, "F"/"D"/"L"/"W"=postseason
         gameIso: g.gameDate,
         gameTime: formatGameTime(g.gameDate),
         venue: g.venue?.name ?? "",
@@ -1077,9 +1081,9 @@ export default function App() {
                 });
                 return (
                   <>
-                    <button style={btnStyle(date === yesterday)} onClick={() => { setDate(yesterday); load(yesterday); }}>YESTERDAY</button>
-                    <button style={btnStyle(date === today)}     onClick={() => { setDate(today);     load(today);     }}>TODAY</button>
-                    <button style={btnStyle(date === tomorrow)}  onClick={() => { setDate(tomorrow);  load(tomorrow);  }}>TOMORROW</button>
+                    <button style={btnStyle(fetched && date === yesterday)} onClick={() => { setDate(yesterday); load(yesterday); }}>YESTERDAY</button>
+                    <button style={btnStyle(fetched && date === today)}     onClick={() => { setDate(today);     load(today);     }}>TODAY</button>
+                    <button style={btnStyle(fetched && date === tomorrow)}  onClick={() => { setDate(tomorrow);  load(tomorrow);  }}>TOMORROW</button>
                     <div style={{display:"flex",alignItems:"center",gap:8,background:"#0d1f30",border:"1px solid #1a2e42",borderRadius:8,padding:"6px 12px"}}>
                       <span style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#4a6080",letterSpacing:1}}>DATE</span>
                       <input type="date" value={date}
@@ -1134,19 +1138,25 @@ export default function App() {
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:52,color:"#0d1f30",letterSpacing:6,lineHeight:1}}>NRFI</div>
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:"#1a3050",letterSpacing:4,marginBottom:8}}>TRACKER</div>
             <div style={{fontFamily:"'Space Mono',monospace",fontSize:11,color:"#2a4060",marginBottom:32,letterSpacing:1}}>SELECT A DATE · LOAD GAMES · BET SMARTER</div>
-            {/* TODO (by 2026-03-26): Replace hardcoded date buttons with dynamic yesterday/today/tomorrow
-                relative to the current date, so this works for any day of the season. */}
-            <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
-              <button onClick={() => { setDate("2026-03-25"); setTimeout(() => load("2026-03-25"), 50); }} style={{padding:"10px 24px",background:"#0d1f30",border:"1px solid #1a2e42",borderRadius:10,color:"#c8d8e8",fontFamily:"'Space Mono',monospace",fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>
-                MAR 25 (OPENING NIGHT)
-              </button>
-              <button onClick={() => { setDate("2026-03-26"); setTimeout(() => load("2026-03-26"), 50); }} style={{padding:"10px 24px",background:"linear-gradient(135deg,#00e5a0,#00bfff)",border:"none",borderRadius:10,color:"#060f18",fontFamily:"'Space Mono',monospace",fontSize:12,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>
-                MAR 26 (OPENING DAY — 11 GAMES)
-              </button>
-              <button onClick={() => { setDate("2026-03-27"); setTimeout(() => load("2026-03-27"), 50); }} style={{padding:"10px 24px",background:"#0d1f30",border:"1px solid #1a2e42",borderRadius:10,color:"#c8d8e8",fontFamily:"'Space Mono',monospace",fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>
-                MAR 27
-              </button>
-            </div>
+            {(() => {
+              const toDateStr = (d) => d.toLocaleDateString("en-CA");
+              const offsetDay = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return toDateStr(d); };
+              const yesterday = offsetDay(-1), today = offsetDay(0), tomorrow = offsetDay(1);
+              const fmt = (s) => new Date(s + "T12:00:00").toLocaleDateString("en-US", { month:"short", day:"numeric" });
+              return (
+                <div style={{display:"flex",gap:12,justifyContent:"center",flexWrap:"wrap"}}>
+                  <button onClick={() => { setDate(yesterday); load(yesterday); }} style={{padding:"10px 24px",background:"#0d1f30",border:"1px solid #1a2e42",borderRadius:10,color:"#c8d8e8",fontFamily:"'Space Mono',monospace",fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>
+                    YESTERDAY · {fmt(yesterday)}
+                  </button>
+                  <button onClick={() => { setDate(today); load(today); }} style={{padding:"10px 24px",background:"linear-gradient(135deg,#00e5a0,#00bfff)",border:"none",borderRadius:10,color:"#060f18",fontFamily:"'Space Mono',monospace",fontSize:12,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>
+                    TODAY · {fmt(today)}
+                  </button>
+                  <button onClick={() => { setDate(tomorrow); load(tomorrow); }} style={{padding:"10px 24px",background:"#0d1f30",border:"1px solid #1a2e42",borderRadius:10,color:"#c8d8e8",fontFamily:"'Space Mono',monospace",fontSize:11,fontWeight:700,letterSpacing:1,cursor:"pointer"}}>
+                    TOMORROW · {fmt(tomorrow)}
+                  </button>
+                </div>
+              );
+            })()}
           </div>
         )}
         {loading && <Spinner msg={status || "LOADING..."}/>}

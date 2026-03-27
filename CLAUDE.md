@@ -89,7 +89,9 @@ Every game load saves predictions + eventual results to DynamoDB for model train
 - `GET /picks?season=2026` — aggregate pick counts per gamePk for model stats
 
 **DynamoDB `nrfi-outcomes` record fields:**
-`gamePk, season, date, homeTeam, awayTeam, venue, homePitcher, awayPitcher, homeERA, awayERA, homeWHIP, awayWHIP, parkFactor, weatherDelta, predictedScore, predictedGrade, eraPenalty, whipPenalty, parkPenalty, homeOPS, awayOPS, homeKPct, awayKPct, actualNRFI?, totalRuns?, awayRuns?, homeRuns?, updatedAt`
+`gamePk, season, gameType, date, homeTeam, awayTeam, venue, homePitcher, awayPitcher, homeERA, awayERA, homeWHIP, awayWHIP, parkFactor, weatherDelta, predictedScore, predictedGrade, eraPenalty, whipPenalty, parkPenalty, homeOPS, awayOPS, homeKPct, awayKPct, actualNRFI?, totalRuns?, awayRuns?, homeRuns?, updatedAt`
+
+**`gameType` values:** `R`=regular season, `S`=spring training, `E`=exhibition, `F`/`D`/`L`/`W`=postseason. **Important:** The MLB API sometimes mislabels minor league / affiliate games as `R`. Model Performance filters on BOTH `gameType === "R"` AND `date >= {season}-03-25` to guard against this.
 
 **To redeploy Lambda:**
 ```bash
@@ -118,15 +120,28 @@ aws lambda update-function-code --function-name nrfi-poller --zip-file fileb://f
 - App uses `const OUTCOMES_API = "https://api.nrfipro.com"` (not the raw amazonaws.com URL)
 
 ## UI Features
-- **Date navigation**: YESTERDAY / TODAY / TOMORROW buttons + date picker; auto-loads on selection
+- **Date navigation**: YESTERDAY / TODAY / TOMORROW buttons + date picker; auto-loads on selection; initial `date` state is dynamic (`new Date().toLocaleDateString("en-CA")`)
+- **Header buttons**: Only highlight (green) after games are fetched (`fetched && date === X`); not highlighted on first load
+- **Home screen**: Shows YESTERDAY/TODAY/TOMORROW quick-load buttons; TODAY highlighted in green as the CTA
 - **Sorting**: Always by grade (A → D); sort toggle removed
+- **Scroll behavior**: `window.scrollTo({ top: 0, behavior: "instant" })` + offset by measured header height on load
 - **Game cards**: Show pitcher ERA/WHIP, park factor, weather pills, lineup quality (OPS/K%), score breakdown panel, crowd pick section, NRFI/YRFI result banner
-- **Indoor stadiums**: Show "🏟 INDOOR" pill; hide all weather pills
+- **Indoor stadiums**: Show "🏟 INDOOR" pill; hide all weather pills; `isIndoor` derived from venue name as fallback if weather fetch fails
 - **Model Performance panel**: Shows per-grade NRFI rate, crowd pick %, and crowd accuracy; positioned above game cards
 - **Chat sidebar**: Visible once a date is loaded; uses same nickname as crowd picks
 
+## SEO & Social Sharing
+- `public/index.html` has full Open Graph + Twitter Card meta tags
+- `og:image` points to `public/og-image.png` (1200×630, logo centered on `#0a1628` navy background)
+- Twitter card type: `summary_large_image`
+- Canonical URL: `https://app.nrfipro.com/`
+
+## Data Quality Notes
+- MLB API `gameType` is not always reliable — affiliate/minor league games can appear as `R`
+- Always combine `gameType === "R"` with a date floor when filtering for model data
+- To backfill `gameType` on existing records: scan `nrfi-outcomes` for records missing `gameType`, call `statsapi.mlb.com/api/v1/schedule?gamePks={pk}` in batches, update each record (run script from `lambda/` directory so AWS SDK is available)
+
 ## TODO
-- **By 2026-03-26**: Replace hardcoded date buttons (Mar 25/26/27) with dynamic yesterday/today/tomorrow relative to current date (see comment in App.js ~line 1120)
 - **Future**: Factor team OPS and K% into NRFI score once enough outcome data exists to calibrate weights
 
 ## Deploy Command
@@ -140,6 +155,8 @@ aws cloudfront create-invalidation --distribution-id E1JFGP2WTX58XO --paths "/*"
 - `src/App.js` — entire frontend app (single file, ~1200 lines)
 - `lambda/index.js` — outcomes + picks API Lambda
 - `lambda-poller/index.js` — scheduled poller Lambda (every 20 min)
-- `public/logo.png` + `src/logo.png` — app logo (keep in sync)
-- `public/og-image.png` — 1200×630 social sharing image
+- `public/logo.png` + `src/logo.png` — app logo (keep in sync, regenerate favicon/logo192/logo512 with Pillow when updated)
+- `public/og-image.png` — 1200×630 social sharing image (logo centered on `#0a1628` background, generated with Pillow)
+- `mockup-card.html` — standalone card UI mockup
+- `mockup-model-performance.html` — model performance panel mockup (mid-season example data)
 - `package.json` — standard CRA setup, no extra dependencies
