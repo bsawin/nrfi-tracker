@@ -206,6 +206,7 @@ exports.handler = async () => {
     games.map(async (game) => {
       const gamePk     = String(game.gamePk);
       const state      = game.status?.abstractGameState;
+      const gameType   = game.gameType ?? "R";
       const venueName  = game.venue?.name ?? "";
       const gameIso    = game.gameDate;
       const homeTeam   = game.teams?.home?.team?.teamName ?? game.teams?.home?.team?.name ?? "";
@@ -254,6 +255,7 @@ exports.handler = async () => {
             Key: { gamePk },
             UpdateExpression: `SET
               season               = if_not_exists(season, :season),
+              gameType             = if_not_exists(gameType, :gameType),
               #dt                  = if_not_exists(#dt, :date),
               gameTime             = :gameTime,
               homeTeam             = :homeTeam,
@@ -287,6 +289,7 @@ exports.handler = async () => {
             ExpressionAttributeNames: { "#dt": "date" },
             ExpressionAttributeValues: {
               ":season":       season,
+              ":gameType":     gameType,
               ":date":         date,
               ":gameTime":     gameIso,
               ":homeTeam":     homeTeam,
@@ -343,19 +346,21 @@ exports.handler = async () => {
               awayRuns         = :ar,
               homeRuns         = :hr,
               season           = if_not_exists(season, :season),
+              gameType         = if_not_exists(gameType, :gameType),
               #dt              = if_not_exists(#dt, :date),
               resultRecordedAt = if_not_exists(resultRecordedAt, :now),
               updatedAt        = :now
             `,
             ExpressionAttributeNames: { "#dt": "date" },
             ExpressionAttributeValues: {
-              ":nrfi":   actualNRFI,
-              ":runs":   totalRuns,
-              ":ar":     awayRuns,
-              ":hr":     homeRuns,
-              ":season": season,
-              ":date":   date,
-              ":now":    new Date().toISOString(),
+              ":nrfi":     actualNRFI,
+              ":runs":     totalRuns,
+              ":ar":       awayRuns,
+              ":hr":       homeRuns,
+              ":season":   season,
+              ":gameType": gameType,
+              ":date":     date,
+              ":now":      new Date().toISOString(),
             },
           }));
 
