@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Bet Report Modal Mockup</title>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #060f18;
+      font-family: 'DM Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 24px;
+    }
+
+    /* ── Simulated app header context ── */
+    .page-hint {
+      font-family: 'Space Mono', monospace;
+      font-size: 9px;
+      color: #2a4060;
+      letter-spacing: 2px;
+      margin-bottom: 32px;
+      text-align: center;
+    }
+
+    /* ── Trigger button (as it would appear in the app header) ── */
+    .bet-report-btn {
+      font-family: 'Space Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 1.5px;
+      padding: 7px 16px;
+      border-radius: 8px;
+      background: #0d1f30;
+      border: 1px solid #1a2e42;
+      color: #8899aa;
+      cursor: pointer;
+      transition: all .2s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .bet-report-btn:hover {
+      background: #00e5a015;
+      border-color: #00e5a050;
+      color: #00e5a0;
+    }
+    .bet-report-btn .btn-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #00e5a0;
+      box-shadow: 0 0 6px #00e5a0;
+    }
+
+    /* ── Overlay ── */
+    .overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.8);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      backdrop-filter: blur(4px);
+    }
+    .overlay.open { display: flex; }
+
+    /* ── Modal ── */
+    .modal {
+      background: linear-gradient(145deg, #0d1f30, #0a1520);
+      border: 1px solid #1a2e42;
+      border-top: 3px solid #00e5a0;
+      border-radius: 14px;
+      width: 100%;
+      max-width: 680px;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0,0,0,.8), 0 0 40px rgba(0,229,160,.05);
+    }
+
+    /* ── Modal header ── */
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 22px 16px;
+      border-bottom: 1px solid #1a2e42;
+      flex-shrink: 0;
+    }
+    .modal-title-group { display: flex; align-items: baseline; gap: 10px; }
+    .modal-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 22px;
+      letter-spacing: 3px;
+      color: #e0eaf4;
+    }
+    .modal-subtitle {
+      font-family: 'Space Mono', monospace;
+      font-size: 8px;
+      color: #4a6080;
+      letter-spacing: 1.5px;
+    }
+    .close-btn {
+      background: none;
+      border: none;
+      color: #4a6080;
+      font-size: 20px;
+      cursor: pointer;
+      line-height: 1;
+      padding: 4px;
+      border-radius: 6px;
+      transition: color .15s;
+    }
+    .close-btn:hover { color: #e0eaf4; }
+
+    /* ── Summary bar ── */
+    .summary-bar {
+      display: flex;
+      gap: 0;
+      padding: 12px 22px;
+      border-bottom: 1px solid #0e1822;
+      background: #060f18;
+      flex-shrink: 0;
+    }
+    .summary-stat {
+      flex: 1;
+      text-align: center;
+      padding: 0 12px;
+      border-right: 1px solid #1a2e42;
+    }
+    .summary-stat:last-child { border-right: none; }
+    .summary-val {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 24px;
+      line-height: 1;
+    }
+    .summary-lbl {
+      font-family: 'Space Mono', monospace;
+      font-size: 7px;
+      color: #4a6080;
+      letter-spacing: 1.5px;
+      margin-top: 3px;
+    }
+
+    /* ── Table ── */
+    .table-wrap {
+      overflow-y: auto;
+      flex: 1;
+      padding: 0;
+    }
+    .table-wrap::-webkit-scrollbar { width: 4px; }
+    .table-wrap::-webkit-scrollbar-track { background: #060f18; }
+    .table-wrap::-webkit-scrollbar-thumb { background: #1a2e42; border-radius: 4px; }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    thead { position: sticky; top: 0; z-index: 1; }
+    thead th {
+      font-family: 'Space Mono', monospace;
+      font-size: 8px;
+      color: #4a6080;
+      letter-spacing: 1.5px;
+      text-align: left;
+      padding: 10px 14px;
+      background: #0a1520;
+      border-bottom: 1px solid #1a2e42;
+      white-space: nowrap;
+    }
+    thead th.right { text-align: right; }
+    thead th.center { text-align: center; }
+
+    tbody tr {
+      border-bottom: 1px solid #0a1825;
+      transition: background .12s;
+    }
+    tbody tr:hover { background: #0d1f2a; }
+    tbody tr.open-row { opacity: .65; }
+
+    tbody td {
+      padding: 10px 14px;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    /* Date */
+    .td-date {
+      font-family: 'Space Mono', monospace;
+      font-size: 9px;
+      color: #4a6080;
+      letter-spacing: 1px;
+    }
+
+    /* Matchup */
+    .td-matchup {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      font-weight: 600;
+      color: #c8d8e8;
+    }
+
+    /* Grade badge */
+    .grade-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px; height: 26px;
+      border-radius: 7px;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 18px;
+      line-height: 1;
+    }
+    .grade-A { background: #00e5a015; color: #00e5a0; border: 1px solid #00e5a040; }
+    .grade-B { background: #4a9eff15; color: #4a9eff; border: 1px solid #4a9eff40; }
+    .grade-C { background: #f5c84215; color: #f5c842; border: 1px solid #f5c84240; }
+    .grade-D { background: #ff4d6d15; color: #ff4d6d; border: 1px solid #ff4d6d40; }
+    .grade-unknown { background: #1a2e4215; color: #4a6080; border: 1px solid #1a2e42; }
+
+    /* Odds */
+    .td-odds {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: #8899aa;
+      text-align: right;
+    }
+
+    /* Status pill */
+    .status-pill {
+      display: inline-block;
+      font-family: 'Space Mono', monospace;
+      font-size: 8px;
+      letter-spacing: 1px;
+      padding: 3px 8px;
+      border-radius: 20px;
+    }
+    .status-Won  { background: #00e5a015; color: #00e5a0; border: 1px solid #00e5a040; }
+    .status-Lost { background: #ff4d6d15; color: #ff4d6d; border: 1px solid #ff4d6d40; }
+    .status-Open { background: #f5c84215; color: #f5c842; border: 1px solid #f5c84240; }
+
+    /* P&L */
+    .td-pl {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      font-weight: 700;
+      text-align: right;
+    }
+    .pl-pos { color: #00e5a0; }
+    .pl-neg { color: #ff4d6d; }
+    .pl-open { color: #4a6080; }
+
+    /* Result */
+    .td-result { text-align: center; }
+    .result-nrfi {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-family: 'Space Mono', monospace; font-size: 9px;
+      color: #00e5a0; letter-spacing: 1px;
+    }
+    .result-yrfi {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-family: 'Space Mono', monospace; font-size: 9px;
+      color: #ff4d6d; letter-spacing: 1px;
+    }
+    .result-pending {
+      font-family: 'Space Mono', monospace; font-size: 9px;
+      color: #2a4060; letter-spacing: 1px;
+    }
+
+    /* ── Footer ── */
+    .modal-footer {
+      padding: 12px 22px;
+      border-top: 1px solid #1a2e42;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+      background: #060f18;
+    }
+    .footer-note {
+      font-family: 'Space Mono', monospace;
+      font-size: 8px;
+      color: #2a4060;
+      letter-spacing: 1px;
+    }
+    .footer-pending {
+      font-family: 'Space Mono', monospace;
+      font-size: 9px;
+      color: #f5c842;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+
+<div class="page-hint">← SIMULATED APP CONTEXT — BUTTON WOULD APPEAR IN HEADER</div>
+
+<button class="bet-report-btn" onclick="document.querySelector('.overlay').classList.add('open')">
+  <span class="btn-dot"></span>
+  BENNY'S BET REPORT
+</button>
+
+<!-- ══════════════════════ MODAL ══════════════════════ -->
+<div class="overlay" onclick="if(event.target===this) this.classList.remove('open')">
+  <div class="modal">
+
+    <!-- Header -->
+    <div class="modal-header">
+      <div class="modal-title-group">
+        <div class="modal-title">BENNY'S BET REPORT</div>
+        <div class="modal-subtitle">NRFI PICKS · 2026 SEASON</div>
+      </div>
+      <button class="close-btn" onclick="document.querySelector('.overlay').classList.remove('open')">✕</button>
+    </div>
+
+    <!-- Summary bar -->
+    <div class="summary-bar">
+      <div class="summary-stat">
+        <div class="summary-val" style="color:#e0eaf4">9W / 5L</div>
+        <div class="summary-lbl">RECORD</div>
+      </div>
+      <div class="summary-stat">
+        <div class="summary-val" style="color:#e0eaf4">$28.00</div>
+        <div class="summary-lbl">WAGERED</div>
+      </div>
+      <div class="summary-stat">
+        <div class="summary-val" style="color:#00e5a0">+$3.74</div>
+        <div class="summary-lbl">NET P&L</div>
+      </div>
+      <div class="summary-stat">
+        <div class="summary-val" style="color:#00e5a0">+13.4%</div>
+        <div class="summary-lbl">ROI</div>
+      </div>
+      <div class="summary-stat">
+        <div class="summary-val" style="color:#f5c842">3</div>
+        <div class="summary-lbl">OPEN BETS</div>
+      </div>
+    </div>
+
+    <!-- Table -->
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>DATE</th>
+            <th>MATCHUP</th>
+            <th class="center">GR</th>
+            <th class="right">ODDS</th>
+            <th class="center">STATUS</th>
+            <th class="right">WAGER</th>
+            <th class="right">P&L</th>
+            <th class="center">RESULT</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Open bets -->
+          <tr class="open-row">
+            <td class="td-date">28 MAR</td>
+            <td class="td-matchup">Cubs vs. Nationals</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">+100</td>
+            <td style="text-align:center"><span class="status-pill status-Open">OPEN</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-open">—</td>
+            <td class="td-result"><span class="result-pending">PENDING</span></td>
+          </tr>
+          <tr class="open-row">
+            <td class="td-date">28 MAR</td>
+            <td class="td-matchup">Giants vs. Yankees</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-125</td>
+            <td style="text-align:center"><span class="status-pill status-Open">OPEN</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-open">—</td>
+            <td class="td-result"><span class="result-pending">PENDING</span></td>
+          </tr>
+          <tr class="open-row">
+            <td class="td-date">28 MAR</td>
+            <td class="td-matchup">Mariners vs. Guardians</td>
+            <td style="text-align:center"><span class="grade-pill grade-unknown">?</span></td>
+            <td class="td-odds">-141</td>
+            <td style="text-align:center"><span class="status-pill status-Open">OPEN</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-open">—</td>
+            <td class="td-result"><span class="result-pending">PENDING</span></td>
+          </tr>
+          <!-- 3/27 settled -->
+          <tr>
+            <td class="td-date">27 MAR</td>
+            <td class="td-matchup">Padres vs. Tigers</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-135</td>
+            <td style="text-align:center"><span class="status-pill status-Won">WON</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-pos">+$1.48</td>
+            <td class="td-result"><span class="result-nrfi">✓ NRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">27 MAR</td>
+            <td class="td-matchup">Mariners vs. Guardians</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-135</td>
+            <td style="text-align:center"><span class="status-pill status-Lost">LOST</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-neg">-$2.00</td>
+            <td class="td-result"><span class="result-yrfi">✗ YRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">27 MAR</td>
+            <td class="td-matchup">Giants vs. Yankees</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-130</td>
+            <td style="text-align:center"><span class="status-pill status-Won">WON</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-pos">+$1.54</td>
+            <td class="td-result"><span class="result-nrfi">✓ NRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">27 MAR</td>
+            <td class="td-matchup">Dodgers vs. D-backs</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-110</td>
+            <td style="text-align:center"><span class="status-pill status-Won">WON</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-pos">+$1.82</td>
+            <td class="td-result"><span class="result-nrfi">✓ NRFI</span></td>
+          </tr>
+          <!-- 3/26 settled -->
+          <tr>
+            <td class="td-date">26 MAR</td>
+            <td class="td-matchup">Cubs vs. Nationals</td>
+            <td style="text-align:center"><span class="grade-pill grade-B">B</span></td>
+            <td class="td-odds">-141</td>
+            <td style="text-align:center"><span class="status-pill status-Won">WON</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-pos">+$1.43</td>
+            <td class="td-result"><span class="result-nrfi">✓ NRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">26 MAR</td>
+            <td class="td-matchup">Mariners vs. Guardians</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-149</td>
+            <td style="text-align:center"><span class="status-pill status-Lost">LOST</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-neg">-$2.00</td>
+            <td class="td-result"><span class="result-yrfi">✗ YRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">26 MAR</td>
+            <td class="td-matchup">Dodgers vs. D-backs</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-110</td>
+            <td style="text-align:center"><span class="status-pill status-Won">WON</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-pos">+$1.82</td>
+            <td class="td-result"><span class="result-nrfi">✓ NRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">26 MAR</td>
+            <td class="td-matchup">Phillies vs. Rangers</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-135</td>
+            <td style="text-align:center"><span class="status-pill status-Lost">LOST</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-neg">-$2.00</td>
+            <td class="td-result"><span class="result-yrfi">✗ YRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">26 MAR</td>
+            <td class="td-matchup">Padres vs. Tigers</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-149</td>
+            <td style="text-align:center"><span class="status-pill status-Lost">LOST</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-neg">-$2.00</td>
+            <td class="td-result"><span class="result-yrfi">✗ YRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">26 MAR</td>
+            <td class="td-matchup">Reds vs. Red Sox</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-169</td>
+            <td style="text-align:center"><span class="status-pill status-Won">WON</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-pos">+$1.18</td>
+            <td class="td-result"><span class="result-nrfi">✓ NRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">26 MAR</td>
+            <td class="td-matchup">Astros vs. Angels</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-130</td>
+            <td style="text-align:center"><span class="status-pill status-Won">WON</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-pos">+$1.54</td>
+            <td class="td-result"><span class="result-nrfi">✓ NRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">26 MAR</td>
+            <td class="td-matchup">Orioles vs. Twins</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-125</td>
+            <td style="text-align:center"><span class="status-pill status-Won">WON</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-pos">+$1.60</td>
+            <td class="td-result"><span class="result-nrfi">✓ NRFI</span></td>
+          </tr>
+          <tr>
+            <td class="td-date">26 MAR</td>
+            <td class="td-matchup">Mets vs. Pirates</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-159</td>
+            <td style="text-align:center"><span class="status-pill status-Lost">LOST</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-neg">-$2.00</td>
+            <td class="td-result"><span class="result-yrfi">✗ YRFI</span></td>
+          </tr>
+          <!-- 3/25 -->
+          <tr>
+            <td class="td-date">25 MAR</td>
+            <td class="td-matchup">Giants vs. Yankees</td>
+            <td style="text-align:center"><span class="grade-pill grade-A">A</span></td>
+            <td class="td-odds">-149</td>
+            <td style="text-align:center"><span class="status-pill status-Won">WON</span></td>
+            <td class="td-odds">$2.00</td>
+            <td class="td-pl pl-pos">+$1.33</td>
+            <td class="td-result"><span class="result-nrfi">✓ NRFI</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Footer -->
+    <div class="modal-footer">
+      <span class="footer-note">MLB · 1ST INNING UNDER 0.5 · ALL BETS $2.00</span>
+      <span class="footer-pending">● 3 BETS PENDING · $6.00 AT RISK</span>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

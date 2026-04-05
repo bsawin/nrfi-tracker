@@ -28,6 +28,9 @@ const getETHour = () => {
 const todayET = () =>
   new Date().toLocaleString("sv", { timeZone: "America/New_York" }).slice(0, 10);
 
+const gameETDate = (gameIso) =>
+  new Date(gameIso).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+
 // ── Park Factors ──────────────────────────────────────────────────────────────
 const PARK_FACTORS = {
   "Coors": 1.25, "American Ball Park": 1.15, "Globe Life": 1.12,
@@ -169,12 +172,14 @@ const fetchPitcherStats = async (personId, season) => {
 };
 
 // ── NRFI Grade ────────────────────────────────────────────────────────────────
-const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, pf, weatherDelta = 0 }) => {
+const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, homeOPS, awayOPS, pf, weatherDelta = 0 }) => {
   let s = 100;
-  s -= Math.max(0, (((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2 - 3.0) * 25);
+  s -= Math.max(0, (((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2 - 4.5) * 20);
   s -= Math.max(0, (((homeWHIP ?? 1.3) + (awayWHIP ?? 1.3)) / 2 - 1.0) * 40);
   s -= (pf - 1.0) * 60;
-  s += weatherDelta;
+  s += weatherDelta * 0.5;
+  const avgOPS = ((homeOPS ?? 0.72) + (awayOPS ?? 0.72)) / 2;
+  s -= Math.max(0, (avgOPS - 0.700) * 150);
   s = Math.round(Math.max(0, Math.min(100, s)));
   return { score: s, grade: s >= 75 ? "A" : s >= 58 ? "B" : s >= 42 ? "C" : "D" };
 };
@@ -209,6 +214,7 @@ exports.handler = async () => {
       const gameType   = game.gameType ?? "R";
       const venueName  = game.venue?.name ?? "";
       const gameIso    = game.gameDate;
+      const etDate     = gameETDate(gameIso);
       const homeTeam   = game.teams?.home?.team?.teamName ?? game.teams?.home?.team?.name ?? "";
       const awayTeam   = game.teams?.away?.team?.teamName ?? game.teams?.away?.team?.name ?? "";
       const homePitcherId   = game.teams?.home?.probablePitcher?.id ?? null;
@@ -240,6 +246,7 @@ exports.handler = async () => {
           const { score, grade } = nrfiGrade({
             homeERA: homeStats?.era ?? null, awayERA: awayStats?.era ?? null,
             homeWHIP: homeStats?.whip ?? null, awayWHIP: awayStats?.whip ?? null,
+            homeOPS: homeTeamStats?.ops ?? null, awayOPS: awayTeamStats?.ops ?? null,
             pf, weatherDelta,
           });
 
@@ -256,7 +263,7 @@ exports.handler = async () => {
             UpdateExpression: `SET
               season               = if_not_exists(season, :season),
               gameType             = if_not_exists(gameType, :gameType),
-              #dt                  = if_not_exists(#dt, :date),
+              #dt                  = :date,
               gameTime             = :gameTime,
               homeTeam             = :homeTeam,
               awayTeam             = :awayTeam,
@@ -290,7 +297,7 @@ exports.handler = async () => {
             ExpressionAttributeValues: {
               ":season":       season,
               ":gameType":     gameType,
-              ":date":         date,
+              ":date":         etDate,
               ":gameTime":     gameIso,
               ":homeTeam":     homeTeam,
               ":awayTeam":     awayTeam,
@@ -306,7 +313,7 @@ exports.handler = async () => {
               ":awayOPS":      awayTeamStats?.ops  ?? null,
               ":homeKPct":     homeTeamStats?.kPct ?? null,
               ":awayKPct":     awayTeamStats?.kPct ?? null,
-              ":eraPenalty":   Math.round(Math.max(0, (avgERA  - 3.0) * 25) * 100) / 100,
+              ":eraPenalty":   Math.round(Math.max(0, (avgERA  - 4.5) * 20) * 100) / 100,
               ":whipPenalty":  Math.round(Math.max(0, (avgWHIP - 1.0) * 40) * 100) / 100,
               ":parkPenalty":  Math.round((pf - 1.0) * 60 * 100) / 100,
               ":tempF":        wx?.tempF     ?? null,
@@ -347,7 +354,7 @@ exports.handler = async () => {
               homeRuns         = :hr,
               season           = if_not_exists(season, :season),
               gameType         = if_not_exists(gameType, :gameType),
-              #dt              = if_not_exists(#dt, :date),
+              #dt              = :date,
               resultRecordedAt = if_not_exists(resultRecordedAt, :now),
               updatedAt        = :now
             `,
@@ -359,7 +366,7 @@ exports.handler = async () => {
               ":hr":       homeRuns,
               ":season":   season,
               ":gameType": gameType,
-              ":date":     date,
+              ":date":     etDate,
               ":now":      new Date().toISOString(),
             },
           }));

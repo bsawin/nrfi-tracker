@@ -18,12 +18,14 @@ const getPF = (venue = "") => {
 // Old multipliers (ERA×12, WHIP×20) gave A grades to every average matchup.
 // New multipliers (ERA×25, WHIP×40) anchor average pitching (~4.2 ERA / 1.28 WHIP)
 // to the C/B boundary, reserving A for genuinely elite matchups.
-const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, pf, weatherDelta = 0 }) => {
+const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, homeOPS, awayOPS, pf, weatherDelta = 0 }) => {
   let s = 100;
-  s -= Math.max(0, (((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2 - 3.0) * 25);
+  s -= Math.max(0, (((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2 - 4.5) * 20);
   s -= Math.max(0, (((homeWHIP ?? 1.3) + (awayWHIP ?? 1.3)) / 2 - 1.0) * 40);
   s -= (pf - 1.0) * 60;
-  s += weatherDelta;
+  s += weatherDelta * 0.5;
+  const avgOPS = ((homeOPS ?? 0.72) + (awayOPS ?? 0.72)) / 2;
+  s -= Math.max(0, (avgOPS - 0.700) * 150);
   s = Math.round(Math.max(0, Math.min(100, s)));
   return s >= 75 ? { g:"A", c:"#00e5a0", l:"Strong NRFI", s } :
          s >= 58 ? { g:"B", c:"#f5c842", l:"Lean NRFI",   s } :
@@ -173,7 +175,7 @@ const buildOutcomePayload = (game, predictedScore, predictedGrade, season, first
     homeKPct:       game.homeKPct ?? null,
     awayKPct:       game.awayKPct ?? null,
     // Individual score components — lets us reweight formula against actuals later
-    eraPenalty:     Math.round(Math.max(0, (avgERA  - 3.0) * 25) * 100) / 100,
+    eraPenalty:     Math.round(Math.max(0, (avgERA  - 4.5) * 20) * 100) / 100,
     whipPenalty:    Math.round(Math.max(0, (avgWHIP - 1.0) * 40) * 100) / 100,
     parkPenalty:    Math.round((pf - 1.0) * 60 * 100) / 100,
     // Individual weather components preserved for model training
@@ -590,7 +592,7 @@ const CrowdPickSection = ({ gamePk, gameState, crowdPick, onPick }) => {
 const Card = ({ game, idx, crowdPick, onPick }) => {
   const pf = getPF(game.venue);
   const weatherDelta = calcWeatherDelta(game.weather);
-  const nr = nrfiGrade({ homeERA:game.homeERA, awayERA:game.awayERA, homeWHIP:game.homeWHIP, awayWHIP:game.awayWHIP, pf, weatherDelta });
+  const nr = nrfiGrade({ homeERA:game.homeERA, awayERA:game.awayERA, homeWHIP:game.homeWHIP, awayWHIP:game.awayWHIP, homeOPS:game.homeOPS, awayOPS:game.awayOPS, pf, weatherDelta });
   const avgERA = game.homeERA != null && game.awayERA != null ? ((game.homeERA + game.awayERA) / 2).toFixed(2) : null;
   const pfPct = ((pf - 1) * 100).toFixed(0);
   const pfc = pf > 1.05 ? "#ff4d6d" : pf < 0.97 ? "#00e5a0" : "#4a6080";
@@ -660,13 +662,16 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
       {(() => {
         const avgERA2  = ((game.homeERA  ?? 4.5) + (game.awayERA  ?? 4.5)) / 2;
         const avgWHIP2 = ((game.homeWHIP ?? 1.3)  + (game.awayWHIP ?? 1.3))  / 2;
-        const eraP  = Math.max(0, (avgERA2  - 3.0) * 25);
+        const avgOPS2  = ((game.homeOPS  ?? 0.72) + (game.awayOPS  ?? 0.72)) / 2;
+        const eraP  = Math.max(0, (avgERA2  - 4.5) * 20);
         const whipP = Math.max(0, (avgWHIP2 - 1.0) * 40);
         const parkP = (pf - 1.0) * 60;
-        const wxD   = weatherDelta;
+        const opsP  = Math.max(0, (avgOPS2 - 0.700) * 150);
+        const wxD   = weatherDelta * 0.5;
         const rows = [
           { label: "ERA penalty",  val: -eraP,  color: "#ff4d6d" },
           { label: "WHIP penalty", val: -whipP, color: "#ff4d6d" },
+          { label: "OPS penalty",  val: -opsP,  color: "#ff9f43" },
           { label: "Park penalty", val: -parkP, color: parkP > 0 ? "#ff9f43" : parkP < 0 ? "#00e5a0" : "#4a6080" },
           { label: "Weather",      val:  wxD,   color: wxD >= 0 ? "#00e5a0" : "#ff4d6d" },
         ];
@@ -995,6 +1000,7 @@ export default function App() {
         const { g: grade, s: score } = nrfiGrade({
           homeERA: g.homeERA, awayERA: g.awayERA,
           homeWHIP: g.homeWHIP, awayWHIP: g.awayWHIP,
+          homeOPS: g.homeOPS, awayOPS: g.awayOPS,
           pf, weatherDelta: wd,
         });
         if (g.firstInning) {
@@ -1027,7 +1033,7 @@ export default function App() {
   const gradeOf = (g) => {
     const pf = getPF(g.venue);
     const weatherDelta = calcWeatherDelta(g.weather);
-    return nrfiGrade({ homeERA:g.homeERA, awayERA:g.awayERA, homeWHIP:g.homeWHIP, awayWHIP:g.awayWHIP, pf, weatherDelta });
+    return nrfiGrade({ homeERA:g.homeERA, awayERA:g.awayERA, homeWHIP:g.homeWHIP, awayWHIP:g.awayWHIP, homeOPS:g.homeOPS, awayOPS:g.awayOPS, pf, weatherDelta });
   };
 
   const sorted = [...games].sort((a, b) =>
