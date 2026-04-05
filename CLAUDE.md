@@ -26,15 +26,16 @@ Tracks "No Run First Inning" (NRFI) betting angles for MLB games. For each day's
 | Weather (temp, wind, rain) | `api.open-meteo.com` — free, no key, supports 16-day forecast |
 
 ## NRFI Scoring Logic (`nrfiGrade` in App.js)
-Starts at 100, subtracts penalties:
-- ERA penalty: `max(0, (avgERA - 3.0) * 25)` — recalibrated so average pitching (~4.2 ERA) lands in C/B range
+Starts at 100, subtracts penalties (calibrated against 123-game 2026 regular season sample):
+- ERA penalty: `max(0, (avgERA - 4.5) * 20)` — threshold raised to 4.5 (league avg), multiplier lowered to 20
 - WHIP penalty: `max(0, (avgWHIP - 1.0) * 40)`
 - Park factor penalty: `(pf - 1.0) * 60`
-- Weather delta added (positive = good for NRFI, negative = bad; always 0 for indoor stadiums)
+- Weather delta: `weatherDelta * 0.5` (halved — found to be noisy signal)
+- OPS penalty: `max(0, (avgOPS - 0.700) * 150)` — strong signal; default 0.72 if unknown
 
 Grades: A ≥ 75, B ≥ 58, C ≥ 42, D < 42
 
-**Note:** Team hitting stats (OPS, K%) are displayed on cards and stored in DynamoDB for future model refinement but do NOT currently affect the score. Intent is to calibrate weights once real outcome data accumulates.
+OPS (`homeOPS`, `awayOPS`) is now an active scoring factor. K% is still stored in DynamoDB but not yet used in scoring.
 
 ## Weather Scoring (`calcWeatherDelta`)
 - Temp < 40°F → +10, < 50°F → +6, < 55°F → +3
@@ -140,9 +141,17 @@ aws lambda update-function-code --function-name nrfi-poller --zip-file fileb://f
 - MLB API `gameType` is not always reliable — affiliate/minor league games can appear as `R`
 - Always combine `gameType === "R"` with a date floor when filtering for model data
 - To backfill `gameType` on existing records: scan `nrfi-outcomes` for records missing `gameType`, call `statsapi.mlb.com/api/v1/schedule?gamePks={pk}` in batches, update each record (run script from `lambda/` directory so AWS SDK is available)
+- **UTC vs ET date bug**: MLB `gameDate` is UTC ISO. Evening ET games (e.g. 9:45pm ET = 1:45am UTC next day) were previously stored under the wrong date. Fixed in poller: `gameETDate(gameIso)` derives ET date using `toLocaleDateString("en-CA", { timeZone: "America/New_York" })`. The `#dt` field in UpdateCommand no longer uses `if_not_exists` so poller auto-corrects stale dates.
 
-## TODO
-- **Future**: Factor team OPS and K% into NRFI score once enough outcome data exists to calibrate weights
+## Benny's Bet Report
+A styled HTML report correlating sportsbook bets with NRFI outcomes, deployed to `https://app.nrfipro.com/bbr`.
+
+- **Script**: `scripts/bet-report.py` — run from repo root
+- **Input**: `~/Downloads/All_Bets_Export.xls` (SpreadsheetML XML exported from sportsbook)
+- **Run command**: `python3 scripts/bet-report.py`
+- **Output**: Terminal table + deploys HTML to S3 key `bbr` (no extension, `Content-Type: text/html`)
+- **Sections**: Grade A bets and Other grade bets, each with subtotal; summary bar shows separate stats for each
+- **Date matching**: Exact match first; for SETTLED bets only, check ±1 day (handles UTC offset); OPEN bets never use fuzzy matching (shows "Pending" if no exact match)
 
 ## Deploy Command
 ```bash
@@ -155,8 +164,10 @@ aws cloudfront create-invalidation --distribution-id E1JFGP2WTX58XO --paths "/*"
 - `src/App.js` — entire frontend app (single file, ~1200 lines)
 - `lambda/index.js` — outcomes + picks API Lambda
 - `lambda-poller/index.js` — scheduled poller Lambda (every 20 min)
+- `scripts/bet-report.py` — Benny's Bet Report: correlates sportsbook XLS export with DynamoDB outcomes, deploys to `app.nrfipro.com/bbr`
 - `public/logo.png` + `src/logo.png` — app logo (keep in sync, regenerate favicon/logo192/logo512 with Pillow when updated)
 - `public/og-image.png` — 1200×630 social sharing image (logo centered on `#0a1628` background, generated with Pillow)
 - `mockup-card.html` — standalone card UI mockup
 - `mockup-model-performance.html` — model performance panel mockup (mid-season example data)
+- `mockup-bet-report.html` — bet report modal mockup (dark theme, matches app design system)
 - `package.json` — standard CRA setup, no extra dependencies
