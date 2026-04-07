@@ -28,12 +28,13 @@ Tracks "No Run First Inning" (NRFI) betting angles for MLB games. For each day's
 ## NRFI Scoring Logic (`nrfiGrade` in App.js)
 Starts at 100, subtracts penalties (calibrated against 123-game 2026 regular season sample):
 - ERA penalty: `max(0, (avgERA - 4.5) * 20)` — threshold raised to 4.5 (league avg), multiplier lowered to 20
+- Weak-link ERA penalty: `max(0, (homeERA - 5.0) * 15) + max(0, (awayERA - 5.0) * 15)` — each pitcher above 5.0 ERA adds penalty (avg ERA can mask one bad starter)
 - WHIP penalty: `max(0, (avgWHIP - 1.0) * 40)`
 - Park factor penalty: `(pf - 1.0) * 60`
 - Weather delta: `weatherDelta * 0.5` (halved — found to be noisy signal)
-- OPS penalty: `max(0, (avgOPS - 0.700) * 150)` — strong signal; default 0.72 if unknown
+- OPS penalty: `max(0, (avgOPS - 0.660) * 300)` — strong signal; default 0.73 if unknown; multiplier raised 150→300, threshold lowered 0.700→0.660
 
-Grades: A ≥ 75, B ≥ 58, C ≥ 42, D < 42
+Grades: A ≥ 80, B ≥ 58, C ≥ 42, D < 42
 
 OPS (`homeOPS`, `awayOPS`) is now an active scoring factor. K% is still stored in DynamoDB but not yet used in scoring.
 
