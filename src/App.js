@@ -14,20 +14,19 @@ const getPF = (venue = "") => {
     if (venue.toLowerCase().includes(k.toLowerCase())) return f;
   return 1.0;
 };
-// Scoring recalibrated against 123-game 2026 regular season sample.
-// OPS is the strongest discriminator; multiplier raised 150→300, threshold lowered to 0.660.
-// Weak-link ERA penalty: each pitcher above 5.0 ERA adds extra penalty (avg ERA can mask one bad starter).
-// Default OPS raised 0.72→0.73 (conservative when data is missing).
-// Grade A threshold raised 75→80 to cut the weakest A games (50% hit rate in 75-79 band).
+// Scoring recalibrated against 298-game 2026 regular season sample.
+// Three signals drive Grade A precision: avg OPS (threshold 0.650), hot-lineup penalty
+// per team above league-avg OPS (0.720), and weather multiplier restored to 1.0.
 const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, homeOPS, awayOPS, pf, weatherDelta = 0 }) => {
   let s = 100;
   s -= Math.max(0, (((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2 - 4.5) * 20);
   s -= Math.max(0, ((homeERA ?? 4.5) - 4.5) * 20) + Math.max(0, ((awayERA ?? 4.5) - 4.5) * 20);
   s -= Math.max(0, (((homeWHIP ?? 1.3) + (awayWHIP ?? 1.3)) / 2 - 1.0) * 40);
   s -= (pf - 1.0) * 60;
-  s += weatherDelta * 0.5;
-  const avgOPS = ((homeOPS ?? 0.73) + (awayOPS ?? 0.73)) / 2;
-  s -= Math.max(0, (avgOPS - 0.660) * 300);
+  s += weatherDelta * 1.0;
+  const hOPS = homeOPS ?? 0.73; const aOPS = awayOPS ?? 0.73;
+  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.650) * 300);
+  s -= Math.max(0, (hOPS - 0.720) * 150) + Math.max(0, (aOPS - 0.720) * 150);
   s = Math.round(Math.max(0, Math.min(100, s)));
   return s >= 88 ? { g:"A", c:"#00e5a0", l:"Strong NRFI", s } :
          s >= 58 ? { g:"B", c:"#f5c842", l:"Lean NRFI",   s } :
@@ -664,18 +663,20 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
       {(() => {
         const avgERA2    = ((game.homeERA  ?? 4.5) + (game.awayERA  ?? 4.5)) / 2;
         const avgWHIP2   = ((game.homeWHIP ?? 1.3)  + (game.awayWHIP ?? 1.3))  / 2;
-        const avgOPS2    = ((game.homeOPS  ?? 0.73) + (game.awayOPS  ?? 0.73)) / 2;
+        const hOPS2      = game.homeOPS ?? 0.73; const aOPS2 = game.awayOPS ?? 0.73;
         const eraP      = Math.max(0, (avgERA2  - 4.5) * 20);
         const weakLinkP = Math.max(0, ((game.homeERA ?? 4.5) - 4.5) * 20) + Math.max(0, ((game.awayERA ?? 4.5) - 4.5) * 20);
         const whipP     = Math.max(0, (avgWHIP2 - 1.0) * 40);
         const parkP     = (pf - 1.0) * 60;
-        const opsP      = Math.max(0, (avgOPS2 - 0.660) * 300);
-        const wxD       = weatherDelta * 0.5;
+        const opsP      = Math.max(0, ((hOPS2 + aOPS2) / 2 - 0.650) * 300);
+        const hotP      = Math.max(0, (hOPS2 - 0.720) * 150) + Math.max(0, (aOPS2 - 0.720) * 150);
+        const wxD       = weatherDelta * 1.0;
         const rows = [
           { label: "ERA penalty",  val: -eraP,      color: "#ff4d6d" },
           ...(weakLinkP > 0 ? [{ label: "Weak starter", val: -weakLinkP, color: "#ff4d6d" }] : []),
           { label: "WHIP penalty", val: -whipP,     color: "#ff4d6d" },
           { label: "OPS penalty",  val: -opsP,      color: "#ff9f43" },
+          ...(hotP > 0 ? [{ label: "Hot lineup",   val: -hotP,      color: "#ff9f43" }] : []),
           { label: "Park penalty", val: -parkP,     color: parkP > 0 ? "#ff9f43" : parkP < 0 ? "#00e5a0" : "#4a6080" },
           { label: "Weather",      val:  wxD,       color: wxD >= 0 ? "#00e5a0" : "#ff4d6d" },
         ];

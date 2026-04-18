@@ -31,8 +31,9 @@ Starts at 100, subtracts penalties (calibrated against 123-game 2026 regular sea
 - Weak-link ERA penalty: `max(0, (homeERA - 4.5) * 20) + max(0, (awayERA - 4.5) * 20)` — each pitcher above league avg (4.5) adds individual penalty; prevents one elite + one mediocre starter from averaging to a falsely good score
 - WHIP penalty: `max(0, (avgWHIP - 1.0) * 40)`
 - Park factor penalty: `(pf - 1.0) * 60`
-- Weather delta: `weatherDelta * 0.5` (halved — found to be noisy signal)
-- OPS penalty: `max(0, (avgOPS - 0.660) * 300)` — strong signal; default 0.73 if unknown; multiplier raised 150→300, threshold lowered 0.700→0.660
+- Weather delta: `weatherDelta * 1.0` (restored to full weight — proven signal: NRFI hits avg +1.23 wx vs misses +0.12)
+- OPS penalty: `max(0, (avgOPS - 0.650) * 300)` — avg OPS threshold lowered to 0.650; default 0.73 if unknown
+- Hot-lineup penalty: `max(0, (homeOPS - 0.720) * 150) + max(0, (awayOPS - 0.720) * 150)` — per-team penalty for any lineup above league avg; avg OPS was masking one hot team paired with a weak one
 
 Grades: A ≥ 88, B ≥ 58, C ≥ 42, D < 42
 

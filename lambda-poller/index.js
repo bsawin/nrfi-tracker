@@ -178,9 +178,10 @@ const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, homeOPS, awayOPS, pf,
   s -= Math.max(0, ((homeERA ?? 4.5) - 4.5) * 20) + Math.max(0, ((awayERA ?? 4.5) - 4.5) * 20);
   s -= Math.max(0, (((homeWHIP ?? 1.3) + (awayWHIP ?? 1.3)) / 2 - 1.0) * 40);
   s -= (pf - 1.0) * 60;
-  s += weatherDelta * 0.5;
-  const avgOPS = ((homeOPS ?? 0.73) + (awayOPS ?? 0.73)) / 2;
-  s -= Math.max(0, (avgOPS - 0.660) * 300);
+  s += weatherDelta * 1.0;
+  const hOPS = homeOPS ?? 0.73; const aOPS = awayOPS ?? 0.73;
+  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.650) * 300);
+  s -= Math.max(0, (hOPS - 0.720) * 150) + Math.max(0, (aOPS - 0.720) * 150);
   s = Math.round(Math.max(0, Math.min(100, s)));
   return { score: s, grade: s >= 88 ? "A" : s >= 58 ? "B" : s >= 42 ? "C" : "D" };
 };
