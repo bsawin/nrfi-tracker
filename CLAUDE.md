@@ -32,8 +32,9 @@ Starts at 100, subtracts penalties (calibrated against 123-game 2026 regular sea
 - WHIP penalty: `max(0, (avgWHIP - 1.0) * 40)`
 - Park factor penalty: `(pf - 1.0) * 60`
 - Weather delta: `weatherDelta * 1.0` (restored to full weight — proven signal: NRFI hits avg +1.23 wx vs misses +0.12)
-- OPS penalty: `max(0, (avgOPS - 0.650) * 300)` — avg OPS threshold lowered to 0.650; default 0.73 if unknown
+- OPS penalty: `max(0, (avgOPS - 0.630) * 300)` — avg OPS threshold lowered to 0.630; default 0.73 if unknown
 - Hot-lineup penalty: `max(0, (homeOPS - 0.720) * 150) + max(0, (awayOPS - 0.720) * 150)` — per-team penalty for any lineup above league avg; avg OPS was masking one hot team paired with a weak one
+- First-inning ERA blending: `effectiveERA = 0.4 * seasonERA + 0.6 * firstInningERA` — fetched via `stats=statSplits&group=pitching&sitCodes=i1`; only used when ≥5 IP of first-inning data; falls back to season ERA gracefully
 
 Grades: A ≥ 88, B ≥ 58, C ≥ 42, D < 42
 
@@ -92,7 +93,7 @@ Every game load saves predictions + eventual results to DynamoDB for model train
 - `GET /picks?season=2026` — aggregate pick counts per gamePk for model stats
 
 **DynamoDB `nrfi-outcomes` record fields:**
-`gamePk, season, gameType, date, homeTeam, awayTeam, venue, homePitcher, awayPitcher, homeERA, awayERA, homeWHIP, awayWHIP, parkFactor, weatherDelta, predictedScore, predictedGrade, eraPenalty, whipPenalty, parkPenalty, homeOPS, awayOPS, homeKPct, awayKPct, actualNRFI?, totalRuns?, awayRuns?, homeRuns?, updatedAt`
+`gamePk, season, gameType, date, homeTeam, awayTeam, venue, homePitcher, awayPitcher, homeERA, awayERA, homeWHIP, awayWHIP, parkFactor, weatherDelta, predictedScore, predictedGrade, eraPenalty, whipPenalty, parkPenalty, homeOPS, awayOPS, homeKPct, awayKPct, homeFirstInningERA, awayFirstInningERA, actualNRFI?, totalRuns?, awayRuns?, homeRuns?, updatedAt`
 
 **`gameType` values:** `R`=regular season, `S`=spring training, `E`=exhibition, `F`/`D`/`L`/`W`=postseason. **Important:** The MLB API sometimes mislabels minor league / affiliate games as `R`. Model Performance filters on BOTH `gameType === "R"` AND `date >= {season}-03-25` to guard against this.
 
