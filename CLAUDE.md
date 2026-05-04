@@ -21,12 +21,13 @@ Tracks "No Run First Inning" (NRFI) betting angles for MLB games. For each day's
 |---|---|
 | Schedule + probable pitchers | `statsapi.mlb.com/api/v1/schedule?sportId=1&date={date}&hydrate=probablePitcher,team,venue` |
 | Pitcher ERA/WHIP | `statsapi.mlb.com/api/v1/people/{id}/stats?stats=season&group=pitching&season={year}` |
+| Pitcher first-inning ERA | `statsapi.mlb.com/api/v1/people/{id}/stats?stats=statSplits&group=pitching&sitCodes=i1&season={year}` — used only when ≥5 IP; blended 40/60 with season ERA |
 | Team hitting stats (OPS, K%) | `statsapi.mlb.com/api/v1/teams/{teamId}/stats?stats=season&group=hitting&season={year}` — falls back to prior season if current season unavailable |
 | Live first-inning linescore | `statsapi.mlb.com/api/v1/game/{gamePk}/linescore` |
 | Weather (temp, wind, rain) | `api.open-meteo.com` — free, no key, supports 16-day forecast |
 
 ## NRFI Scoring Logic (`nrfiGrade` in App.js)
-Starts at 100, subtracts penalties (calibrated against 123-game 2026 regular season sample):
+Starts at 100, subtracts penalties (calibrated against 298-game 2026 regular season sample):
 - ERA penalty: `max(0, (avgERA - 4.5) * 20)` — threshold raised to 4.5 (league avg), multiplier lowered to 20
 - Weak-link ERA penalty: `max(0, (homeERA - 4.5) * 20) + max(0, (awayERA - 4.5) * 20)` — each pitcher above league avg (4.5) adds individual penalty; prevents one elite + one mediocre starter from averaging to a falsely good score
 - WHIP penalty: `max(0, (avgWHIP - 1.0) * 40)`
@@ -164,7 +165,7 @@ aws cloudfront create-invalidation --distribution-id E1JFGP2WTX58XO --paths "/*"
 ```
 
 ## Key Files
-- `src/App.js` — entire frontend app (single file, ~1200 lines)
+- `src/App.js` — entire frontend app (single file, ~1280 lines)
 - `lambda/index.js` — outcomes + picks API Lambda
 - `lambda-poller/index.js` — scheduled poller Lambda (every 20 min)
 - `scripts/bet-report.py` — Benny's Bet Report: correlates sportsbook XLS export with DynamoDB outcomes, deploys to `app.nrfipro.com/bbr`
