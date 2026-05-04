@@ -199,10 +199,10 @@ const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, homeOPS, awayOPS, pf,
   s -= (pf - 1.0) * 60;
   s += weatherDelta * 1.0;
   const hOPS = homeOPS ?? 0.73; const aOPS = awayOPS ?? 0.73;
-  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.630) * 300);
+  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.650) * 300);
   s -= Math.max(0, (hOPS - 0.720) * 150) + Math.max(0, (aOPS - 0.720) * 150);
   s = Math.round(Math.max(0, Math.min(100, s)));
-  return { score: s, grade: s >= 88 ? "A" : s >= 58 ? "B" : s >= 42 ? "C" : "D" };
+  return { score: s, grade: s >= 80 ? "A" : s >= 58 ? "B" : s >= 42 ? "C" : "D" };
 };
 
 // ── Handler ───────────────────────────────────────────────────────────────────

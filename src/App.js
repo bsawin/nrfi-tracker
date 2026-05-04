@@ -1,5 +1,18 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, Component } from "react";
 import proLogo from "./logo.png";
+
+class ErrorBoundary extends Component {
+  state = { crashed: false };
+  static getDerivedStateFromError() { return { crashed: true }; }
+  render() {
+    if (this.state.crashed) return (
+      <div style={{padding:"14px 32px",background:"#0a1520",borderBottom:"1px solid #0e1f30",textAlign:"center"}}>
+        <span style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#4a6080",letterSpacing:2}}>MODEL STATS UNAVAILABLE · REFRESH TO RETRY</span>
+      </div>
+    );
+    return this.props.children;
+  }
+}
 
 // ── Scoring ───────────────────────────────────────────────────────────────────
 const PARK_FACTORS = {
@@ -15,8 +28,8 @@ const getPF = (venue = "") => {
   return 1.0;
 };
 // Scoring recalibrated against 298-game 2026 regular season sample.
-// Three signals drive Grade A precision: avg OPS (threshold 0.650), hot-lineup penalty
-// per team above league-avg OPS (0.720), and weather multiplier restored to 1.0.
+// Grade A ≥80: promotes the 72-80 score band (71% NRFI rate) into A. OPS threshold
+// raised to 0.650 — 0.630 was over-penalizing good bets with OPS 0.630-0.680.
 const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, homeOPS, awayOPS, pf, weatherDelta = 0 }) => {
   let s = 100;
   s -= Math.max(0, (((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2 - 4.5) * 20);
@@ -25,10 +38,10 @@ const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, homeOPS, awayOPS, pf,
   s -= (pf - 1.0) * 60;
   s += weatherDelta * 1.0;
   const hOPS = homeOPS ?? 0.73; const aOPS = awayOPS ?? 0.73;
-  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.630) * 300);
+  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.650) * 300);
   s -= Math.max(0, (hOPS - 0.720) * 150) + Math.max(0, (aOPS - 0.720) * 150);
   s = Math.round(Math.max(0, Math.min(100, s)));
-  return s >= 88 ? { g:"A", c:"#00e5a0", l:"Strong NRFI", s } :
+  return s >= 80 ? { g:"A", c:"#00e5a0", l:"Strong NRFI", s } :
          s >= 58 ? { g:"B", c:"#f5c842", l:"Lean NRFI",   s } :
          s >= 42 ? { g:"C", c:"#ff9f43", l:"Toss-Up",     s } :
                    { g:"D", c:"#ff4d6d", l:"Risky NRFI",  s };
@@ -698,7 +711,7 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
         const weakLinkP = Math.max(0, (hEffERA - 4.5) * 20) + Math.max(0, (aEffERA - 4.5) * 20);
         const whipP     = Math.max(0, (avgWHIP2 - 1.0) * 40);
         const parkP     = (pf - 1.0) * 60;
-        const opsP      = Math.max(0, ((hOPS2 + aOPS2) / 2 - 0.630) * 300);
+        const opsP      = Math.max(0, ((hOPS2 + aOPS2) / 2 - 0.650) * 300);
         const hotP      = Math.max(0, (hOPS2 - 0.720) * 150) + Math.max(0, (aOPS2 - 0.720) * 150);
         const wxD       = weatherDelta * 1.0;
         const rows = [
@@ -772,21 +785,29 @@ const ModelStatsPanel = ({ season }) => {
   const [records,      setRecords]      = useState(null);
   const [picksSummary, setPicksSummary] = useState(null);
   const [loading,      setLoading]      = useState(true);
+  const [fetchError,   setFetchError]   = useState(false);
 
   useEffect(() => {
+    setLoading(true); setFetchError(false);
     Promise.all([
       fetch(`${OUTCOMES_API}/outcomes?season=${season}`).then(r => r.json()),
       fetch(`${OUTCOMES_API}/picks?season=${season}`).then(r => r.json()).catch(() => []),
     ]).then(([items, picks]) => {
+      if (!Array.isArray(items)) { setFetchError(true); setLoading(false); return; }
       setRecords(items);
-      setPicksSummary(picks);
+      setPicksSummary(Array.isArray(picks) ? picks : []);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => { setFetchError(true); setLoading(false); });
   }, [season]);
 
   if (loading) return (
     <div style={{padding:"14px 32px",background:"#0a1520",borderBottom:"1px solid #0e1f30",textAlign:"center"}}>
       <span style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#4a6080",letterSpacing:2}}>LOADING MODEL DATA...</span>
+    </div>
+  );
+  if (fetchError) return (
+    <div style={{padding:"14px 32px",background:"#0a1520",borderBottom:"1px solid #0e1f30",textAlign:"center"}}>
+      <span style={{fontFamily:"'Space Mono',monospace",fontSize:10,color:"#4a6080",letterSpacing:2}}>MODEL STATS UNAVAILABLE · REFRESH TO RETRY</span>
     </div>
   );
 
@@ -1156,7 +1177,7 @@ export default function App() {
       </div>
 
       {/* Model stats panel */}
-      <ModelStatsPanel season={date.slice(0, 4)}/>
+      <ErrorBoundary><ModelStatsPanel season={date.slice(0, 4)}/></ErrorBoundary>
 
       {/* Nickname prompt — shown on first chat or when changing name */}
       {showNickPrompt && (
