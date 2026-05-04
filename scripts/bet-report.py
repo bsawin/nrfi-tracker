@@ -229,7 +229,7 @@ def summary_block_html(s, label, accent):
     </div>"""
 
 
-def render_html(rows, stats):
+def render_html(rows, stats, yrfi_rows=None, yrfi_stats=None):
     updated = datetime.now().strftime('%-d %b %Y, %-I:%M %p ET').upper()
     pl_color = '#00e5a0' if stats['pl'] >= 0 else '#ff4d6d'
     pl_str = f"+${stats['pl']:.2f}" if stats['pl'] >= 0 else f"-${abs(stats['pl']):.2f}"
@@ -240,14 +240,20 @@ def render_html(rows, stats):
     def grade_class(g):
         return {'A': 'grade-A', 'B': 'grade-B', 'C': 'grade-C', 'D': 'grade-D'}.get(g, 'grade-unknown')
 
-    def row_html(r):
+    def row_html(r, bet_type='nrfi'):
         open_class = ' open-row' if r['is_open'] else ''
         gc = grade_class(r['grade'])
 
         if r['actual_nrfi'] is True:
-            result_html = '<span class="result-nrfi">&#10003; NRFI</span>'
+            if bet_type == 'yrfi':
+                result_html = '<span class="result-yrfi">&#10007; NRFI</span>'
+            else:
+                result_html = '<span class="result-nrfi">&#10003; NRFI</span>'
         elif r['actual_nrfi'] is False:
-            result_html = '<span class="result-yrfi">&#10007; YRFI</span>'
+            if bet_type == 'yrfi':
+                result_html = '<span class="result-nrfi">&#10003; YRFI</span>'
+            else:
+                result_html = '<span class="result-yrfi">&#10007; YRFI</span>'
         else:
             result_html = '<span class="result-pending">PENDING</span>'
 
@@ -288,12 +294,12 @@ def render_html(rows, stats):
             <td style="text-align:center"><span class="subtotal-roi" style="color:{pl_c}">{roi_s}</span></td>
           </tr>"""
 
-    def section_html(section_rows, label):
+    def section_html(section_rows, label, bet_type='nrfi'):
         return f"""
           <tr class="section-header">
             <td colspan="8">{label}</td>
           </tr>
-          {''.join(row_html(r) for r in section_rows)}
+          {''.join(row_html(r, bet_type) for r in section_rows)}
           {subtotal_html(section_stats(section_rows))}"""
 
     rows_html = section_html(a_rows, 'GRADE A')
@@ -303,6 +309,49 @@ def render_html(rows, stats):
     pending_html = ''
     if stats['open_count']:
         pending_html = f'<span class="footer-pending">&#9679; {stats["open_count"]} BETS PENDING &middot; ${stats["open_wager"]:.2f} AT RISK</span>'
+
+    # YRFI card
+    yrfi_card_html = ''
+    if yrfi_rows:
+        ya_rows     = [r for r in yrfi_rows if r['grade'] == 'A']
+        yother_rows = [r for r in yrfi_rows if r['grade'] != 'A']
+        yrfi_rows_html = section_html(ya_rows, 'GRADE A', 'yrfi')
+        if yother_rows:
+            yrfi_rows_html += section_html(yother_rows, 'OTHER GRADES', 'yrfi')
+        yrfi_pending_html = ''
+        if yrfi_stats and yrfi_stats['open_count']:
+            yrfi_pending_html = f'<span class="footer-pending">&#9679; {yrfi_stats["open_count"]} BETS PENDING &middot; ${yrfi_stats["open_wager"]:.2f} AT RISK</span>'
+        yrfi_card_html = f"""
+  <div class="card" style="margin-top:20px;border-top-color:#ff4d6d;">
+    <div class="card-type-label" style="font-family:'Space Mono',monospace;font-size:8px;letter-spacing:2px;color:#ff4d6d;padding:8px 14px;background:#060f18;border-bottom:1px solid #1a2e42;">YRFI BETS &mdash; 1ST INNING OVER 0.5</div>
+    <div class="summary-bar">
+      {summary_block_html(section_stats(ya_rows), 'GRADE A', '#ff4d6d') if ya_rows else ''}
+      {summary_block_html(section_stats(yother_rows), 'OTHER GRADES', '#4a6080') if yother_rows else ''}
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>DATE</th>
+            <th>MATCHUP</th>
+            <th class="center">GR</th>
+            <th class="right">ODDS</th>
+            <th class="center">STATUS</th>
+            <th class="right">WAGER</th>
+            <th class="right">P&L</th>
+            <th class="center">RESULT</th>
+          </tr>
+        </thead>
+        <tbody>
+          {yrfi_rows_html}
+        </tbody>
+      </table>
+    </div>
+    <div class="card-footer">
+      <span class="footer-note">MLB &middot; 1ST INNING OVER 0.5 &middot; 2026 SEASON</span>
+      {yrfi_pending_html}
+    </div>
+  </div>"""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -570,6 +619,7 @@ def render_html(rows, stats):
   </div>
 
   <div class="card">
+    <div class="card-type-label" style="font-family:'Space Mono',monospace;font-size:8px;letter-spacing:2px;color:#00e5a0;padding:8px 14px;background:#060f18;border-bottom:1px solid #1a2e42;">NRFI BETS &mdash; 1ST INNING UNDER 0.5</div>
     <div class="summary-bar">
       {summary_block_html(section_stats(a_rows), 'GRADE A', '#00e5a0')}
       {summary_block_html(section_stats(other_rows), 'OTHER GRADES', '#4a6080') if other_rows else ''}
@@ -600,6 +650,8 @@ def render_html(rows, stats):
       {pending_html}
     </div>
   </div>
+
+  {yrfi_card_html}
 
 </div>
 </body>
@@ -647,12 +699,17 @@ def main():
                  and b.get('Bet Type') == '1st Inning Total Runs'
                  and 'Under 0.5' in b.get('Market', '')]
 
-    if not nrfi_bets:
-        print("No MLB NRFI bets found.")
+    yrfi_bets = [b for b in all_bets
+                 if b.get('League') == 'MLB'
+                 and b.get('Bet Type') == '1st Inning Total Runs'
+                 and 'Over 0.5' in b.get('Market', '')]
+
+    if not nrfi_bets and not yrfi_bets:
+        print("No MLB 1st inning bets found.")
         return
 
     game_dates = set()
-    for b in nrfi_bets:
+    for b in nrfi_bets + yrfi_bets:
         date_str = parse_result_date(b.get('Result', ''))
         if date_str:
             dt = datetime.strptime(date_str, '%Y-%m-%d')
@@ -662,7 +719,8 @@ def main():
     print(f"Fetching outcomes for {len(game_dates)} dates from DynamoDB...", file=sys.stderr)
     outcomes = fetch_outcomes(sorted(game_dates))
 
-    rows, stats = build_rows(nrfi_bets, outcomes)
+    rows,      stats      = build_rows(nrfi_bets, outcomes)
+    yrfi_rows, yrfi_stats = build_rows(yrfi_bets, outcomes) if yrfi_bets else ([], None)
 
     # ── Terminal output ──
     def print_rows(section_rows):
@@ -687,6 +745,7 @@ def main():
     other_rows = [r for r in rows if r['grade'] != 'A']
 
     print()
+    print("── NRFI BETS (Under 0.5) " + '─' * 64)
     print(hdr)
     print(div)
     if a_rows:
@@ -707,13 +766,41 @@ def main():
     print(div)
     pl_str  = f"+${stats['pl']:.2f}" if stats['pl'] >= 0 else f"-${abs(stats['pl']):.2f}"
     roi_str = f"+{stats['roi']:.1f}%" if stats['roi'] >= 0 else f"{stats['roi']:.1f}%"
-    print(f"TOTAL  {stats['record']}  |  Wagered: {stats['wagered']}  |  Net P&L: {pl_str}  |  ROI: {roi_str}")
+    print(f"NRFI TOTAL  {stats['record']}  |  Wagered: {stats['wagered']}  |  Net P&L: {pl_str}  |  ROI: {roi_str}")
     if stats['open_count']:
         print(f"Open:  {stats['open_count']} bets pending (${stats['open_wager']:.2f} at risk)")
 
+    if yrfi_rows:
+        ya_rows     = [r for r in yrfi_rows if r['grade'] == 'A']
+        yother_rows = [r for r in yrfi_rows if r['grade'] != 'A']
+        print()
+        print("── YRFI BETS (Over 0.5) " + '─' * 64)
+        print(hdr)
+        print(div)
+        if ya_rows:
+            print("  GRADE A")
+            print(div)
+            print_rows(ya_rows)
+            print(div)
+            print_subtotal(ya_rows)
+        if yother_rows:
+            print()
+            print("  OTHER GRADES")
+            print(div)
+            print_rows(yother_rows)
+            print(div)
+            print_subtotal(yother_rows)
+        print()
+        print(div)
+        ypl_str  = f"+${yrfi_stats['pl']:.2f}" if yrfi_stats['pl'] >= 0 else f"-${abs(yrfi_stats['pl']):.2f}"
+        yroi_str = f"+{yrfi_stats['roi']:.1f}%" if yrfi_stats['roi'] >= 0 else f"{yrfi_stats['roi']:.1f}%"
+        print(f"YRFI TOTAL  {yrfi_stats['record']}  |  Wagered: {yrfi_stats['wagered']}  |  Net P&L: {ypl_str}  |  ROI: {yroi_str}")
+        if yrfi_stats['open_count']:
+            print(f"Open:  {yrfi_stats['open_count']} bets pending (${yrfi_stats['open_wager']:.2f} at risk)")
+
     # ── Deploy HTML ──
     print(f"\nDeploying report to S3...", file=sys.stderr)
-    html = render_html(rows, stats)
+    html = render_html(rows, stats, yrfi_rows or None, yrfi_stats)
     if deploy_html(html):
         print(f"Published: {PUBLIC_URL}", file=sys.stderr)
     else:
