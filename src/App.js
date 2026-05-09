@@ -27,19 +27,18 @@ const getPF = (venue = "") => {
     if (venue.toLowerCase().includes(k.toLowerCase())) return f;
   return 1.0;
 };
-// Scoring recalibrated against 298-game 2026 regular season sample.
-// Grade A ≥80: promotes the 72-80 score band (71% NRFI rate) into A. OPS threshold
-// raised to 0.650 — 0.630 was over-penalizing good bets with OPS 0.630-0.680.
-const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, homeOPS, awayOPS, pf, weatherDelta = 0 }) => {
-  let s = 100;
-  s -= Math.max(0, (((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2 - 4.5) * 20);
-  s -= Math.max(0, ((homeERA ?? 4.5) - 4.5) * 20) + Math.max(0, ((awayERA ?? 4.5) - 4.5) * 20);
-  s -= Math.max(0, (((homeWHIP ?? 1.3) + (awayWHIP ?? 1.3)) / 2 - 1.0) * 40);
-  s -= (pf - 1.0) * 60;
-  s += weatherDelta * 1.0;
+// Scoring rebuilt on signal analysis of 564 settled 2026 games.
+// Only maxERA and maxOPS have measurable correlation to NRFI outcomes; WHIP and weather
+// are noise. ERA threshold lowered to 4.0 (stricter) to spread grade distribution.
+const nrfiGrade = ({ homeERA, awayERA, homeOPS, awayOPS, pf }) => {
+  const hERA = homeERA ?? 4.5; const aERA = awayERA ?? 4.5;
   const hOPS = homeOPS ?? 0.73; const aOPS = awayOPS ?? 0.73;
-  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.650) * 300);
-  s -= Math.max(0, (hOPS - 0.720) * 150) + Math.max(0, (aOPS - 0.720) * 150);
+  let s = 100;
+  s -= Math.max(0, (Math.max(hERA, aERA) - 4.0) * 20);       // weak-link ERA
+  s -= Math.max(0, ((hERA + aERA) / 2 - 4.0) * 8);            // avg ERA secondary
+  s -= (pf - 1.0) * 60;                                         // park factor
+  s -= Math.max(0, (Math.max(hOPS, aOPS) - 0.720) * 200);     // hot lineup
+  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.670) * 120);        // avg lineup
   s = Math.round(Math.max(0, Math.min(100, s)));
   return s >= 80 ? { g:"A", c:"#00e5a0", l:"Strong NRFI", s } :
          s >= 58 ? { g:"B", c:"#f5c842", l:"Lean NRFI",   s } :
@@ -166,8 +165,7 @@ const OUTCOMES_API = "https://api.nrfipro.com";
 const buildOutcomePayload = (game, predictedScore, predictedGrade, season, firstInning = null) => {
   const wx  = game.weather;
   const pf  = getPF(game.venue);
-  const avgERA  = ((game.homeERA  ?? 4.5) + (game.awayERA  ?? 4.5)) / 2;
-  const avgWHIP = ((game.homeWHIP ?? 1.3)  + (game.awayWHIP ?? 1.3))  / 2;
+  const avgERA = ((game.homeERA ?? 4.5) + (game.awayERA ?? 4.5)) / 2;
   const payload = {
     season,
     gameType:       game.gameType ?? "R",
@@ -188,11 +186,10 @@ const buildOutcomePayload = (game, predictedScore, predictedGrade, season, first
     awayOPS:            game.awayOPS           ?? null,
     homeKPct:           game.homeKPct          ?? null,
     awayKPct:           game.awayKPct          ?? null,
-    homeFirstInningERA: game.homeFirstInningERA ?? null,
-    awayFirstInningERA: game.awayFirstInningERA ?? null,
+    homeRecentERA:  game.homeRecentERA ?? null,
+    awayRecentERA:  game.awayRecentERA ?? null,
     // Individual score components — lets us reweight formula against actuals later
-    eraPenalty:     Math.round((Math.max(0, (avgERA - 4.5) * 20) + Math.max(0, ((game.homeERA ?? 4.5) - 4.5) * 20) + Math.max(0, ((game.awayERA ?? 4.5) - 4.5) * 20)) * 100) / 100,
-    whipPenalty:    Math.round(Math.max(0, (avgWHIP - 1.0) * 40) * 100) / 100,
+    eraPenalty:     Math.round((Math.max(0, (Math.max(game.homeERA ?? 4.5, game.awayERA ?? 4.5) - 4.0) * 20) + Math.max(0, (avgERA - 4.0) * 8)) * 100) / 100,
     parkPenalty:    Math.round((pf - 1.0) * 60 * 100) / 100,
     // Individual weather components preserved for model training
     tempF:          wx?.tempF        ?? null,
@@ -479,30 +476,31 @@ const fetchPitcherStats = async (personId, season) => {
   return (await tryFetch(season)) ?? (await tryFetch(String(parseInt(season) - 1)));
 };
 
-// First-inning ERA split — sitCode i1. Returns null if insufficient data (<5 IP).
-const fetchFirstInningERA = async (personId, season) => {
+// Recent ERA from last 3 starts via gameLog. More predictive than season ERA for
+// starters who've had a hot/cold streak. Requires ≥2 qualifying starts (≥1 IP each).
+const fetchRecentERA = async (personId, season) => {
   try {
     const r = await fetch(
-      `${MLB_API}/people/${personId}/stats?stats=statSplits&group=pitching&sitCodes=i1&season=${season}`
+      `${MLB_API}/people/${personId}/stats?stats=gameLog&group=pitching&season=${season}`
     );
     if (!r.ok) return null;
     const d = await r.json();
-    const splits = d.stats?.[0]?.splits;
-    if (!splits?.length) return null;
-    const stat = splits[0].stat;
-    const era = stat.era  != null ? parseFloat(stat.era)  : null;
-    const ip  = stat.inningsPitched != null ? parseFloat(stat.inningsPitched) : 0;
-    if (era == null || ip < 5) return null; // need at least 5 starts of data
-    return era;
+    const splits = (d.stats?.[0]?.splits ?? [])
+      .filter(s => parseFloat(s.stat?.inningsPitched || 0) >= 1.0);
+    const recent = splits.slice(-3);
+    if (recent.length < 2) return null;
+    const totalIP = recent.reduce((sum, s) => sum + parseFloat(s.stat?.inningsPitched || 0), 0);
+    const totalER = recent.reduce((sum, s) => sum + (parseInt(s.stat?.earnedRuns) || 0), 0);
+    if (totalIP < 2) return null;
+    return Math.round((totalER / totalIP * 9) * 100) / 100;
   } catch { return null; }
 };
 
-// Blend season ERA with first-inning ERA. First-inning is more directly predictive
-// so weighted 60%; season ERA provides stability. Falls back gracefully if either is null.
-const blendERA = (seasonERA, firstInningERA) => {
-  if (firstInningERA == null) return seasonERA;
-  if (seasonERA == null) return firstInningERA;
-  return Math.round((0.4 * seasonERA + 0.6 * firstInningERA) * 100) / 100;
+// Blend season ERA (stability) with recent form ERA (signal). Falls back gracefully.
+const effectiveERA = (seasonERA, recentERA) => {
+  if (recentERA == null) return seasonERA;
+  if (seasonERA == null) return recentERA;
+  return Math.round((0.6 * seasonERA + 0.4 * recentERA) * 100) / 100;
 };
 
 const formatGameTime = (isoString) => {
@@ -633,8 +631,7 @@ const CrowdPickSection = ({ gamePk, gameState, crowdPick, onPick }) => {
 
 const Card = ({ game, idx, crowdPick, onPick }) => {
   const pf = getPF(game.venue);
-  const weatherDelta = calcWeatherDelta(game.weather);
-  const nr = nrfiGrade({ homeERA:blendERA(game.homeERA, game.homeFirstInningERA), awayERA:blendERA(game.awayERA, game.awayFirstInningERA), homeWHIP:game.homeWHIP, awayWHIP:game.awayWHIP, homeOPS:game.homeOPS, awayOPS:game.awayOPS, pf, weatherDelta });
+  const nr = nrfiGrade({ homeERA:effectiveERA(game.homeERA, game.homeRecentERA), awayERA:effectiveERA(game.awayERA, game.awayRecentERA), homeOPS:game.homeOPS, awayOPS:game.awayOPS, pf });
   const avgERA = game.homeERA != null && game.awayERA != null ? ((game.homeERA + game.awayERA) / 2).toFixed(2) : null;
   const pfPct = ((pf - 1) * 100).toFixed(0);
   const pfc = pf > 1.05 ? "#ff4d6d" : pf < 0.97 ? "#00e5a0" : "#4a6080";
@@ -702,26 +699,20 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
 
       {/* Score breakdown */}
       {(() => {
-        const hEffERA    = blendERA(game.homeERA, game.homeFirstInningERA) ?? 4.5;
-        const aEffERA    = blendERA(game.awayERA, game.awayFirstInningERA) ?? 4.5;
-        const avgERA2    = (hEffERA + aEffERA) / 2;
-        const avgWHIP2   = ((game.homeWHIP ?? 1.3)  + (game.awayWHIP ?? 1.3))  / 2;
-        const hOPS2      = game.homeOPS ?? 0.73; const aOPS2 = game.awayOPS ?? 0.73;
-        const eraP      = Math.max(0, (avgERA2  - 4.5) * 20);
-        const weakLinkP = Math.max(0, (hEffERA - 4.5) * 20) + Math.max(0, (aEffERA - 4.5) * 20);
-        const whipP     = Math.max(0, (avgWHIP2 - 1.0) * 40);
-        const parkP     = (pf - 1.0) * 60;
-        const opsP      = Math.max(0, ((hOPS2 + aOPS2) / 2 - 0.650) * 300);
-        const hotP      = Math.max(0, (hOPS2 - 0.720) * 150) + Math.max(0, (aOPS2 - 0.720) * 150);
-        const wxD       = weatherDelta * 1.0;
+        const hEffERA     = effectiveERA(game.homeERA, game.homeRecentERA) ?? 4.5;
+        const aEffERA     = effectiveERA(game.awayERA, game.awayRecentERA) ?? 4.5;
+        const hOPS2       = game.homeOPS ?? 0.73; const aOPS2 = game.awayOPS ?? 0.73;
+        const weakLinkERAP = Math.max(0, (Math.max(hEffERA, aEffERA) - 4.0) * 20);
+        const avgERAP      = Math.max(0, ((hEffERA + aEffERA) / 2 - 4.0) * 8);
+        const parkP        = (pf - 1.0) * 60;
+        const hotOPSP      = Math.max(0, (Math.max(hOPS2, aOPS2) - 0.720) * 200);
+        const avgOPSP      = Math.max(0, ((hOPS2 + aOPS2) / 2 - 0.670) * 120);
         const rows = [
-          { label: "ERA penalty",  val: -eraP,      color: "#ff4d6d" },
-          ...(weakLinkP > 0 ? [{ label: "Weak starter", val: -weakLinkP, color: "#ff4d6d" }] : []),
-          { label: "WHIP penalty", val: -whipP,     color: "#ff4d6d" },
-          { label: "OPS penalty",  val: -opsP,      color: "#ff9f43" },
-          ...(hotP > 0 ? [{ label: "Hot lineup",   val: -hotP,      color: "#ff9f43" }] : []),
-          { label: "Park penalty", val: -parkP,     color: parkP > 0 ? "#ff9f43" : parkP < 0 ? "#00e5a0" : "#4a6080" },
-          { label: "Weather",      val:  wxD,       color: wxD >= 0 ? "#00e5a0" : "#ff4d6d" },
+          { label: "Weak-link ERA", val: -weakLinkERAP, color: "#ff4d6d" },
+          ...(avgERAP > 0 ? [{ label: "Avg ERA",      val: -avgERAP,    color: "#ff9f43" }] : []),
+          ...(hotOPSP > 0 ? [{ label: "Hot lineup",   val: -hotOPSP,    color: "#ff9f43" }] : []),
+          ...(avgOPSP > 0 ? [{ label: "Avg OPS",      val: -avgOPSP,    color: "#ff9f43" }] : []),
+          { label: "Park penalty",  val: -parkP,         color: parkP > 0 ? "#ff9f43" : parkP < 0 ? "#00e5a0" : "#4a6080" },
         ];
         const maxAbs = Math.max(...rows.map(r => Math.abs(r.val)), 1);
         return (
@@ -742,7 +733,7 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
               <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",letterSpacing:1}}>FINAL SCORE</span>
               <div style={{display:"flex",alignItems:"baseline",gap:8}}>
                 <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#2a4060"}}>
-                  100 − {eraP.toFixed(1)} − {whipP.toFixed(1)} {parkP >= 0 ? "−" : "+"} {Math.abs(parkP).toFixed(1)} {wxD >= 0 ? "+" : "−"} {Math.abs(wxD).toFixed(1)} =
+                  100 − {weakLinkERAP.toFixed(1)} − {avgERAP.toFixed(1)} {parkP >= 0 ? "−" : "+"} {Math.abs(parkP).toFixed(1)} − {hotOPSP.toFixed(1)} − {avgOPSP.toFixed(1)} =
                 </span>
                 <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:nr.c,lineHeight:1}}>{nr.s}</span>
               </div>
@@ -775,7 +766,7 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
 
 // ── Model Stats Panel ─────────────────────────────────────────────────────────
 const GRADE_META = {
-  A: { c: "#00e5a0", l: "Strong NRFI", range: "score ≥ 75" },
+  A: { c: "#00e5a0", l: "Strong NRFI", range: "score ≥ 80" },
   B: { c: "#f5c842", l: "Lean NRFI",   range: "score 58–74" },
   C: { c: "#ff9f43", l: "Toss-Up",     range: "score 42–57" },
   D: { c: "#ff4d6d", l: "Risky NRFI",  range: "score < 42"  },
@@ -1000,9 +991,9 @@ export default function App() {
         gameList.flatMap(g => [g.homeTeamId, g.awayTeamId]).filter(Boolean)
       )];
 
-      const [statsEntries, firstInningERAEntries, weatherResults, firstInningResults, teamStatsEntries] = await Promise.all([
+      const [statsEntries, recentERAEntries, weatherResults, firstInningResults, teamStatsEntries] = await Promise.all([
         Promise.all(pitcherIds.map(async (id) => [id, await fetchPitcherStats(id, season)])),
-        Promise.all(pitcherIds.map(async (id) => [id, await fetchFirstInningERA(id, season)])),
+        Promise.all(pitcherIds.map(async (id) => [id, await fetchRecentERA(id, season)])),
         Promise.all(gameList.map(async (g) => {
           const stadium = getStadium(g.venue);
           if (!stadium) return null;
@@ -1016,21 +1007,21 @@ export default function App() {
         Promise.all(teamIds.map(async (id) => [id, await fetchTeamStats(id, season)])),
       ]);
 
-      const statsMap         = Object.fromEntries(statsEntries);
-      const firstInningERAMap = Object.fromEntries(firstInningERAEntries);
-      const teamStatsMap     = Object.fromEntries(teamStatsEntries);
+      const statsMap      = Object.fromEntries(statsEntries);
+      const recentERAMap  = Object.fromEntries(recentERAEntries);
+      const teamStatsMap  = Object.fromEntries(teamStatsEntries);
 
       // ── Step 3: Merge ─────────────────────────────────────────────────────
       const enriched = gameList.map((g, i) => ({
         ...g,
-        awayERA:            statsMap[g.awayPitcherId]?.era        ?? null,
-        awayWHIP:           statsMap[g.awayPitcherId]?.whip       ?? null,
-        homeERA:            statsMap[g.homePitcherId]?.era        ?? null,
-        homeWHIP:           statsMap[g.homePitcherId]?.whip       ?? null,
-        homeFirstInningERA: firstInningERAMap[g.homePitcherId]    ?? null,
-        awayFirstInningERA: firstInningERAMap[g.awayPitcherId]    ?? null,
-        awayStatSeason:     statsMap[g.awayPitcherId]?.statSeason ?? null,
-        homeStatSeason:     statsMap[g.homePitcherId]?.statSeason ?? null,
+        awayERA:        statsMap[g.awayPitcherId]?.era        ?? null,
+        awayWHIP:       statsMap[g.awayPitcherId]?.whip       ?? null,
+        homeERA:        statsMap[g.homePitcherId]?.era        ?? null,
+        homeWHIP:       statsMap[g.homePitcherId]?.whip       ?? null,
+        homeRecentERA:  recentERAMap[g.homePitcherId]         ?? null,
+        awayRecentERA:  recentERAMap[g.awayPitcherId]         ?? null,
+        awayStatSeason: statsMap[g.awayPitcherId]?.statSeason ?? null,
+        homeStatSeason: statsMap[g.homePitcherId]?.statSeason ?? null,
         homeOPS:        teamStatsMap[g.homeTeamId]?.ops       ?? null,
         awayOPS:        teamStatsMap[g.awayTeamId]?.ops       ?? null,
         homeKPct:       teamStatsMap[g.homeTeamId]?.kPct      ?? null,
@@ -1056,12 +1047,10 @@ export default function App() {
 
       enriched.forEach((g) => {
         const pf = getPF(g.venue);
-        const wd = calcWeatherDelta(g.weather);
         const { g: grade, s: score } = nrfiGrade({
-          homeERA: blendERA(g.homeERA, g.homeFirstInningERA), awayERA: blendERA(g.awayERA, g.awayFirstInningERA),
-          homeWHIP: g.homeWHIP, awayWHIP: g.awayWHIP,
+          homeERA: effectiveERA(g.homeERA, g.homeRecentERA), awayERA: effectiveERA(g.awayERA, g.awayRecentERA),
           homeOPS: g.homeOPS, awayOPS: g.awayOPS,
-          pf, weatherDelta: wd,
+          pf,
         });
         if (g.firstInning) {
           recordResult(g.gamePk, g.firstInning, score, grade, season, g);
@@ -1092,8 +1081,7 @@ export default function App() {
 
   const gradeOf = (g) => {
     const pf = getPF(g.venue);
-    const weatherDelta = calcWeatherDelta(g.weather);
-    return nrfiGrade({ homeERA:blendERA(g.homeERA, g.homeFirstInningERA), awayERA:blendERA(g.awayERA, g.awayFirstInningERA), homeWHIP:g.homeWHIP, awayWHIP:g.awayWHIP, homeOPS:g.homeOPS, awayOPS:g.awayOPS, pf, weatherDelta });
+    return nrfiGrade({ homeERA:effectiveERA(g.homeERA, g.homeRecentERA), awayERA:effectiveERA(g.awayERA, g.awayRecentERA), homeOPS:g.homeOPS, awayOPS:g.awayOPS, pf });
   };
 
   const sorted = [...games].sort((a, b) =>

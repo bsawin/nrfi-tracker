@@ -171,36 +171,36 @@ const fetchPitcherStats = async (personId, season) => {
   return (await tryFetch(season)) ?? (await tryFetch(String(parseInt(season) - 1)));
 };
 
-const fetchFirstInningERA = async (personId, season) => {
+const fetchRecentERA = async (personId, season) => {
   try {
-    const d = await get(`${MLB_API}/people/${personId}/stats?stats=statSplits&group=pitching&sitCodes=i1&season=${season}`);
-    const splits = d.stats?.[0]?.splits;
-    if (!splits?.length) return null;
-    const stat = splits[0].stat;
-    const era = stat.era != null ? parseFloat(stat.era) : null;
-    const ip  = stat.inningsPitched != null ? parseFloat(stat.inningsPitched) : 0;
-    if (era == null || ip < 5) return null;
-    return era;
+    const d = await get(`${MLB_API}/people/${personId}/stats?stats=gameLog&group=pitching&season=${season}`);
+    const splits = (d.stats?.[0]?.splits ?? [])
+      .filter(s => parseFloat(s.stat?.inningsPitched || 0) >= 1.0);
+    const recent = splits.slice(-3);
+    if (recent.length < 2) return null;
+    const totalIP = recent.reduce((sum, s) => sum + parseFloat(s.stat?.inningsPitched || 0), 0);
+    const totalER = recent.reduce((sum, s) => sum + (parseInt(s.stat?.earnedRuns) || 0), 0);
+    if (totalIP < 2) return null;
+    return Math.round((totalER / totalIP * 9) * 100) / 100;
   } catch { return null; }
 };
 
-const blendERA = (seasonERA, firstInningERA) => {
-  if (firstInningERA == null) return seasonERA;
-  if (seasonERA == null) return firstInningERA;
-  return Math.round((0.4 * seasonERA + 0.6 * firstInningERA) * 100) / 100;
+const effectiveERA = (seasonERA, recentERA) => {
+  if (recentERA == null) return seasonERA;
+  if (seasonERA == null) return recentERA;
+  return Math.round((0.6 * seasonERA + 0.4 * recentERA) * 100) / 100;
 };
 
 // ── NRFI Grade ────────────────────────────────────────────────────────────────
-const nrfiGrade = ({ homeERA, awayERA, homeWHIP, awayWHIP, homeOPS, awayOPS, pf, weatherDelta = 0 }) => {
-  let s = 100;
-  s -= Math.max(0, (((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2 - 4.5) * 20);
-  s -= Math.max(0, ((homeERA ?? 4.5) - 4.5) * 20) + Math.max(0, ((awayERA ?? 4.5) - 4.5) * 20);
-  s -= Math.max(0, (((homeWHIP ?? 1.3) + (awayWHIP ?? 1.3)) / 2 - 1.0) * 40);
-  s -= (pf - 1.0) * 60;
-  s += weatherDelta * 1.0;
+const nrfiGrade = ({ homeERA, awayERA, homeOPS, awayOPS, pf }) => {
+  const hERA = homeERA ?? 4.5; const aERA = awayERA ?? 4.5;
   const hOPS = homeOPS ?? 0.73; const aOPS = awayOPS ?? 0.73;
-  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.650) * 300);
-  s -= Math.max(0, (hOPS - 0.720) * 150) + Math.max(0, (aOPS - 0.720) * 150);
+  let s = 100;
+  s -= Math.max(0, (Math.max(hERA, aERA) - 4.0) * 20);
+  s -= Math.max(0, ((hERA + aERA) / 2 - 4.0) * 8);
+  s -= (pf - 1.0) * 60;
+  s -= Math.max(0, (Math.max(hOPS, aOPS) - 0.720) * 200);
+  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.670) * 120);
   s = Math.round(Math.max(0, Math.min(100, s)));
   return { score: s, grade: s >= 80 ? "A" : s >= 58 ? "B" : s >= 42 ? "C" : "D" };
 };
@@ -251,11 +251,11 @@ exports.handler = async () => {
           const stadium = getStadium(venueName);
           const pf = getPF(venueName);
 
-          const [homeStats, awayStats, homeFirstInningERA, awayFirstInningERA, rawWeather, homeTeamStats, awayTeamStats] = await Promise.all([
-            homePitcherId ? fetchPitcherStats(homePitcherId, season)   : Promise.resolve(null),
-            awayPitcherId ? fetchPitcherStats(awayPitcherId, season)   : Promise.resolve(null),
-            homePitcherId ? fetchFirstInningERA(homePitcherId, season) : Promise.resolve(null),
-            awayPitcherId ? fetchFirstInningERA(awayPitcherId, season) : Promise.resolve(null),
+          const [homeStats, awayStats, homeRecentERA, awayRecentERA, rawWeather, homeTeamStats, awayTeamStats] = await Promise.all([
+            homePitcherId ? fetchPitcherStats(homePitcherId, season) : Promise.resolve(null),
+            awayPitcherId ? fetchPitcherStats(awayPitcherId, season) : Promise.resolve(null),
+            homePitcherId ? fetchRecentERA(homePitcherId, season)    : Promise.resolve(null),
+            awayPitcherId ? fetchRecentERA(awayPitcherId, season)    : Promise.resolve(null),
             stadium       ? fetchWeather(stadium.lat, stadium.lon, date, gameIso) : Promise.resolve(null),
             homeTeamId    ? fetchTeamStats(homeTeamId, season) : Promise.resolve(null),
             awayTeamId    ? fetchTeamStats(awayTeamId, season) : Promise.resolve(null),
@@ -265,19 +265,16 @@ exports.handler = async () => {
             ? { ...rawWeather, cfBearing: stadium.cfBearing, isIndoor: stadium.indoor }
             : (stadium ? { isIndoor: stadium.indoor } : null);
 
-          const weatherDelta = calcWeatherDelta(wx);
           const homeERA  = homeStats?.era  ?? null;
           const awayERA  = awayStats?.era  ?? null;
           const homeWHIP = homeStats?.whip ?? null;
           const awayWHIP = awayStats?.whip ?? null;
-          const avgERA   = ((homeERA  ?? 4.5) + (awayERA  ?? 4.5)) / 2;
-          const avgWHIP  = ((homeWHIP ?? 1.3)  + (awayWHIP ?? 1.3))  / 2;
+          const avgERA   = ((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2;
 
           const { score, grade } = nrfiGrade({
-            homeERA: blendERA(homeERA, homeFirstInningERA), awayERA: blendERA(awayERA, awayFirstInningERA),
-            homeWHIP, awayWHIP,
+            homeERA: effectiveERA(homeERA, homeRecentERA), awayERA: effectiveERA(awayERA, awayRecentERA),
             homeOPS: homeTeamStats?.ops ?? null, awayOPS: awayTeamStats?.ops ?? null,
-            pf, weatherDelta,
+            pf,
           });
 
           await client.send(new UpdateCommand({
@@ -302,10 +299,9 @@ exports.handler = async () => {
               awayOPS              = :awayOPS,
               homeKPct             = :homeKPct,
               awayKPct             = :awayKPct,
-              homeFirstInningERA   = :homeFirstInningERA,
-              awayFirstInningERA   = :awayFirstInningERA,
+              homeRecentERA        = :homeRecentERA,
+              awayRecentERA        = :awayRecentERA,
               eraPenalty           = :eraPenalty,
-              whipPenalty          = :whipPenalty,
               parkPenalty          = :parkPenalty,
               tempF                = :tempF,
               windSpeed            = :windSpeed,
@@ -320,38 +316,37 @@ exports.handler = async () => {
             `,
             ExpressionAttributeNames: { "#dt": "date" },
             ExpressionAttributeValues: {
-              ":season":       season,
-              ":gameType":     gameType,
-              ":date":         etDate,
-              ":gameTime":     gameIso,
-              ":homeTeam":     homeTeam,
-              ":awayTeam":     awayTeam,
-              ":venue":        venueName,
-              ":homePitcher":  homePitcherName,
-              ":awayPitcher":  awayPitcherName,
-              ":homeERA":      homeERA,
-              ":awayERA":      awayERA,
-              ":homeWHIP":     homeWHIP,
-              ":awayWHIP":     awayWHIP,
-              ":pf":           pf,
-              ":homeOPS":      homeTeamStats?.ops  ?? null,
-              ":awayOPS":      awayTeamStats?.ops  ?? null,
-              ":homeKPct":     homeTeamStats?.kPct ?? null,
-              ":awayKPct":           awayTeamStats?.kPct ?? null,
-              ":homeFirstInningERA": homeFirstInningERA  ?? null,
-              ":awayFirstInningERA": awayFirstInningERA  ?? null,
-              ":eraPenalty":   Math.round((Math.max(0, (avgERA - 4.5) * 20) + Math.max(0, ((homeERA ?? 4.5) - 4.5) * 20) + Math.max(0, ((awayERA ?? 4.5) - 4.5) * 20)) * 100) / 100,
-              ":whipPenalty":  Math.round(Math.max(0, (avgWHIP - 1.0) * 40) * 100) / 100,
-              ":parkPenalty":  Math.round((pf - 1.0) * 60 * 100) / 100,
-              ":tempF":        wx?.tempF     ?? null,
-              ":windSpeed":    wx?.windSpeed ?? null,
-              ":windDir":      wx?.windDir   ?? null,
-              ":precipPct":    wx?.precipPct ?? null,
-              ":isIndoor":     wx?.isIndoor  ?? false,
-              ":weatherDelta": weatherDelta,
-              ":score":        score,
-              ":grade":        grade,
-              ":now":          new Date().toISOString(),
+              ":season":        season,
+              ":gameType":      gameType,
+              ":date":          etDate,
+              ":gameTime":      gameIso,
+              ":homeTeam":      homeTeam,
+              ":awayTeam":      awayTeam,
+              ":venue":         venueName,
+              ":homePitcher":   homePitcherName,
+              ":awayPitcher":   awayPitcherName,
+              ":homeERA":       homeERA,
+              ":awayERA":       awayERA,
+              ":homeWHIP":      homeWHIP,
+              ":awayWHIP":      awayWHIP,
+              ":pf":            pf,
+              ":homeOPS":       homeTeamStats?.ops  ?? null,
+              ":awayOPS":       awayTeamStats?.ops  ?? null,
+              ":homeKPct":      homeTeamStats?.kPct ?? null,
+              ":awayKPct":      awayTeamStats?.kPct ?? null,
+              ":homeRecentERA": homeRecentERA ?? null,
+              ":awayRecentERA": awayRecentERA ?? null,
+              ":eraPenalty":    Math.round((Math.max(0, (Math.max(homeERA ?? 4.5, awayERA ?? 4.5) - 4.0) * 20) + Math.max(0, (avgERA - 4.0) * 8)) * 100) / 100,
+              ":parkPenalty":   Math.round((pf - 1.0) * 60 * 100) / 100,
+              ":tempF":         wx?.tempF     ?? null,
+              ":windSpeed":     wx?.windSpeed ?? null,
+              ":windDir":       wx?.windDir   ?? null,
+              ":precipPct":     wx?.precipPct ?? null,
+              ":isIndoor":      wx?.isIndoor  ?? false,
+              ":weatherDelta":  calcWeatherDelta(wx),
+              ":score":         score,
+              ":grade":         grade,
+              ":now":           new Date().toISOString(),
             },
           }));
 

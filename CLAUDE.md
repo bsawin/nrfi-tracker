@@ -21,25 +21,26 @@ Tracks "No Run First Inning" (NRFI) betting angles for MLB games. For each day's
 |---|---|
 | Schedule + probable pitchers | `statsapi.mlb.com/api/v1/schedule?sportId=1&date={date}&hydrate=probablePitcher,team,venue` |
 | Pitcher ERA/WHIP | `statsapi.mlb.com/api/v1/people/{id}/stats?stats=season&group=pitching&season={year}` |
-| Pitcher first-inning ERA | `statsapi.mlb.com/api/v1/people/{id}/stats?stats=statSplits&group=pitching&sitCodes=i1&season={year}` — used only when ≥5 IP; blended 40/60 with season ERA |
+| Pitcher recent ERA (last 3 starts) | `statsapi.mlb.com/api/v1/people/{id}/stats?stats=gameLog&group=pitching&season={year}` — last 3 starts ≥1 IP; blended 60/40 with season ERA |
 | Team hitting stats (OPS, K%) | `statsapi.mlb.com/api/v1/teams/{teamId}/stats?stats=season&group=hitting&season={year}` — falls back to prior season if current season unavailable |
 | Live first-inning linescore | `statsapi.mlb.com/api/v1/game/{gamePk}/linescore` |
 | Weather (temp, wind, rain) | `api.open-meteo.com` — free, no key, supports 16-day forecast |
 
 ## NRFI Scoring Logic (`nrfiGrade` in App.js)
-Starts at 100, subtracts penalties (calibrated against 298-game 2026 regular season sample):
-- ERA penalty: `max(0, (avgERA - 4.5) * 20)` — threshold raised to 4.5 (league avg), multiplier lowered to 20
-- Weak-link ERA penalty: `max(0, (homeERA - 4.5) * 20) + max(0, (awayERA - 4.5) * 20)` — each pitcher above league avg (4.5) adds individual penalty; prevents one elite + one mediocre starter from averaging to a falsely good score
-- WHIP penalty: `max(0, (avgWHIP - 1.0) * 40)`
+Rebuilt after signal analysis of 564 settled 2026 games (Pearson r). Only ERA and OPS have measurable correlation to NRFI outcomes; WHIP (r=−0.021) and weather (r=+0.002) are noise and removed.
+
+Starts at 100, subtracts penalties:
+- Weak-link ERA: `max(0, (max(homeERA, awayERA) - 4.0) * 20)` — worst starter drives the penalty; threshold 4.0 (stricter than league avg 4.5)
+- Avg ERA secondary: `max(0, (avgERA - 4.0) * 8)` — smaller multiplier, adds signal when both starters are mediocre
 - Park factor penalty: `(pf - 1.0) * 60`
-- Weather delta: `weatherDelta * 1.0` (restored to full weight — proven signal: NRFI hits avg +1.23 wx vs misses +0.12)
-- OPS penalty: `max(0, (avgOPS - 0.650) * 300)` — avg OPS threshold raised back to 0.650; 0.630 was over-penalizing games with OPS 0.630-0.680 that hit NRFI at 71%; default 0.73 if unknown
-- Hot-lineup penalty: `max(0, (homeOPS - 0.720) * 150) + max(0, (awayOPS - 0.720) * 150)` — per-team penalty for any lineup above league avg; avg OPS was masking one hot team paired with a weak one
-- First-inning ERA blending: `effectiveERA = 0.4 * seasonERA + 0.6 * firstInningERA` — fetched via `stats=statSplits&group=pitching&sitCodes=i1`; only used when ≥5 IP of first-inning data; falls back to season ERA gracefully
+- Hot lineup: `max(0, (max(homeOPS, awayOPS) - 0.720) * 200)` — worst lineup; OPS above 0.720 penalized
+- Avg lineup: `max(0, (avgOPS - 0.670) * 120)` — secondary; penalizes when both lineups are above avg
 
 Grades: A ≥ 80, B ≥ 58, C ≥ 42, D < 42
 
-OPS (`homeOPS`, `awayOPS`) is now an active scoring factor. K% is still stored in DynamoDB but not yet used in scoring.
+**Recent ERA blending**: `effectiveERA = 0.6 * seasonERA + 0.4 * recentERA` — `recentERA` computed from last 3 qualifying starts (≥1 IP each) via `stats=gameLog`; requires ≥2 starts of data; falls back to season ERA gracefully. Note: `stats=statSplits&sitCodes=i1` (first-inning splits) was found to return empty data for all tested pitchers and was replaced by this approach.
+
+OPS (`homeOPS`, `awayOPS`) and K% are stored in DynamoDB. K% not yet used in scoring.
 
 ## Weather Scoring (`calcWeatherDelta`)
 - Temp < 40°F → +10, < 50°F → +6, < 55°F → +3
@@ -94,7 +95,7 @@ Every game load saves predictions + eventual results to DynamoDB for model train
 - `GET /picks?season=2026` — aggregate pick counts per gamePk for model stats
 
 **DynamoDB `nrfi-outcomes` record fields:**
-`gamePk, season, gameType, date, homeTeam, awayTeam, venue, homePitcher, awayPitcher, homeERA, awayERA, homeWHIP, awayWHIP, parkFactor, weatherDelta, predictedScore, predictedGrade, eraPenalty, whipPenalty, parkPenalty, homeOPS, awayOPS, homeKPct, awayKPct, homeFirstInningERA, awayFirstInningERA, actualNRFI?, totalRuns?, awayRuns?, homeRuns?, updatedAt`
+`gamePk, season, gameType, date, homeTeam, awayTeam, venue, homePitcher, awayPitcher, homeERA, awayERA, homeWHIP, awayWHIP, parkFactor, weatherDelta, predictedScore, predictedGrade, eraPenalty, parkPenalty, homeOPS, awayOPS, homeKPct, awayKPct, homeRecentERA, awayRecentERA, actualNRFI?, totalRuns?, awayRuns?, homeRuns?, updatedAt`
 
 **`gameType` values:** `R`=regular season, `S`=spring training, `E`=exhibition, `F`/`D`/`L`/`W`=postseason. **Important:** The MLB API sometimes mislabels minor league / affiliate games as `R`. Model Performance filters on BOTH `gameType === "R"` AND `date >= {season}-03-25` to guard against this.
 
