@@ -27,23 +27,26 @@ const getPF = (venue = "") => {
     if (venue.toLowerCase().includes(k.toLowerCase())) return f;
   return 1.0;
 };
-// Scoring rebuilt on signal analysis of 564 settled 2026 games.
-// Only maxERA and maxOPS have measurable correlation to NRFI outcomes; WHIP and weather
-// are noise. ERA threshold lowered to 4.0 (stricter) to spread grade distribution.
-const nrfiGrade = ({ homeERA, awayERA, homeOPS, awayOPS, pf }) => {
-  const hERA = homeERA ?? 4.5; const aERA = awayERA ?? 4.5;
+// Scoring rebuilt on signal analysis of 717 settled 2026 games.
+// recentERA is the dominant signal (r=-0.103 to -0.135); season ERA is noise for home pitcher (r=-0.006).
+// Grade A requires both pitchers to have recentERA — without it there is insufficient signal to be confident.
+const GRADE_COLORS = { A:"#00e5a0", B:"#f5c842", C:"#ff9f43", D:"#ff4d6d" };
+const GRADE_LABELS = { A:"Strong NRFI", B:"Lean NRFI", C:"Toss-Up", D:"Risky NRFI" };
+const nrfiGrade = ({ homeERA, awayERA, homeRecentERA, awayRecentERA, homeOPS, awayOPS, pf }) => {
+  const hEff = effectiveERA(homeERA, homeRecentERA) ?? 4.5;
+  const aEff = effectiveERA(awayERA, awayRecentERA) ?? 4.5;
   const hOPS = homeOPS ?? 0.73; const aOPS = awayOPS ?? 0.73;
   let s = 100;
-  s -= Math.max(0, (Math.max(hERA, aERA) - 4.0) * 20);       // weak-link ERA
-  s -= Math.max(0, ((hERA + aERA) / 2 - 4.0) * 8);            // avg ERA secondary
+  s -= Math.max(0, (Math.max(hEff, aEff) - 4.0) * 20);       // weak-link ERA
+  s -= Math.max(0, ((hEff + aEff) / 2 - 4.0) * 8);            // avg ERA secondary
   s -= (pf - 1.0) * 60;                                         // park factor
   s -= Math.max(0, (Math.max(hOPS, aOPS) - 0.720) * 200);     // hot lineup
   s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.670) * 120);        // avg lineup
   s = Math.round(Math.max(0, Math.min(100, s)));
-  return s >= 80 ? { g:"A", c:"#00e5a0", l:"Strong NRFI", s } :
-         s >= 58 ? { g:"B", c:"#f5c842", l:"Lean NRFI",   s } :
-         s >= 42 ? { g:"C", c:"#ff9f43", l:"Toss-Up",     s } :
-                   { g:"D", c:"#ff4d6d", l:"Risky NRFI",  s };
+  // Grade A requires both pitchers to have recentERA; without it, cap at B
+  const hasBothRecent = homeRecentERA != null && awayRecentERA != null;
+  const g = (s >= 80 && hasBothRecent) ? "A" : s >= 58 ? "B" : s >= 42 ? "C" : "D";
+  return { g, c: GRADE_COLORS[g], l: GRADE_LABELS[g], s };
 };
 
 // ── Stadium Data ──────────────────────────────────────────────────────────────
@@ -496,11 +499,12 @@ const fetchRecentERA = async (personId, season) => {
   } catch { return null; }
 };
 
-// Blend season ERA (stability) with recent form ERA (signal). Falls back gracefully.
+// Blend season ERA with recent form ERA. Recent form is the dominant signal (r=-0.13 vs r=-0.006),
+// so weighted 80%. Season ERA provides a floor when recent data is thin.
 const effectiveERA = (seasonERA, recentERA) => {
   if (recentERA == null) return seasonERA;
   if (seasonERA == null) return recentERA;
-  return Math.round((0.6 * seasonERA + 0.4 * recentERA) * 100) / 100;
+  return Math.round((0.2 * seasonERA + 0.8 * recentERA) * 100) / 100;
 };
 
 const formatGameTime = (isoString) => {
@@ -631,7 +635,7 @@ const CrowdPickSection = ({ gamePk, gameState, crowdPick, onPick }) => {
 
 const Card = ({ game, idx, crowdPick, onPick }) => {
   const pf = getPF(game.venue);
-  const nr = nrfiGrade({ homeERA:effectiveERA(game.homeERA, game.homeRecentERA), awayERA:effectiveERA(game.awayERA, game.awayRecentERA), homeOPS:game.homeOPS, awayOPS:game.awayOPS, pf });
+  const nr = nrfiGrade({ homeERA:game.homeERA, awayERA:game.awayERA, homeRecentERA:game.homeRecentERA, awayRecentERA:game.awayRecentERA, homeOPS:game.homeOPS, awayOPS:game.awayOPS, pf });
   const avgERA = game.homeERA != null && game.awayERA != null ? ((game.homeERA + game.awayERA) / 2).toFixed(2) : null;
   const pfPct = ((pf - 1) * 100).toFixed(0);
   const pfc = pf > 1.05 ? "#ff4d6d" : pf < 0.97 ? "#00e5a0" : "#4a6080";
@@ -766,7 +770,7 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
 
 // ── Model Stats Panel ─────────────────────────────────────────────────────────
 const GRADE_META = {
-  A: { c: "#00e5a0", l: "Strong NRFI", range: "score ≥ 80" },
+  A: { c: "#00e5a0", l: "Strong NRFI", range: "score ≥ 80 · both recent ERA" },
   B: { c: "#f5c842", l: "Lean NRFI",   range: "score 58–74" },
   C: { c: "#ff9f43", l: "Toss-Up",     range: "score 42–57" },
   D: { c: "#ff4d6d", l: "Risky NRFI",  range: "score < 42"  },
@@ -1048,7 +1052,8 @@ export default function App() {
       enriched.forEach((g) => {
         const pf = getPF(g.venue);
         const { g: grade, s: score } = nrfiGrade({
-          homeERA: effectiveERA(g.homeERA, g.homeRecentERA), awayERA: effectiveERA(g.awayERA, g.awayRecentERA),
+          homeERA: g.homeERA, awayERA: g.awayERA,
+          homeRecentERA: g.homeRecentERA, awayRecentERA: g.awayRecentERA,
           homeOPS: g.homeOPS, awayOPS: g.awayOPS,
           pf,
         });
@@ -1081,7 +1086,7 @@ export default function App() {
 
   const gradeOf = (g) => {
     const pf = getPF(g.venue);
-    return nrfiGrade({ homeERA:effectiveERA(g.homeERA, g.homeRecentERA), awayERA:effectiveERA(g.awayERA, g.awayRecentERA), homeOPS:g.homeOPS, awayOPS:g.awayOPS, pf });
+    return nrfiGrade({ homeERA:g.homeERA, awayERA:g.awayERA, homeRecentERA:g.homeRecentERA, awayRecentERA:g.awayRecentERA, homeOPS:g.homeOPS, awayOPS:g.awayOPS, pf });
   };
 
   const sorted = [...games].sort((a, b) =>

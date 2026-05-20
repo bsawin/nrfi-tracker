@@ -38,7 +38,9 @@ Starts at 100, subtracts penalties:
 
 Grades: A ≥ 80, B ≥ 58, C ≥ 42, D < 42
 
-**Recent ERA blending**: `effectiveERA = 0.6 * seasonERA + 0.4 * recentERA` — `recentERA` computed from last 3 qualifying starts (≥1 IP each) via `stats=gameLog`; requires ≥2 starts of data; falls back to season ERA gracefully. Note: `stats=statSplits&sitCodes=i1` (first-inning splits) was found to return empty data for all tested pitchers and was replaced by this approach.
+**Recent ERA blending**: `effectiveERA = 0.2 * seasonERA + 0.8 * recentERA` — `recentERA` computed from last 3 qualifying starts (≥1 IP each) via `stats=gameLog`; requires ≥2 starts of data; falls back to season ERA gracefully. Recent form is weighted 80% because it is ~20× more predictive than season ERA (r=−0.13 vs r=−0.006 for home pitcher). Note: `stats=statSplits&sitCodes=i1` (first-inning splits) was found to return empty data for all tested pitchers and was replaced by this approach.
+
+**Grade A data gate**: A game can only receive Grade A if BOTH pitchers have `recentERA` data available. Without both, the grade is capped at B regardless of score. Analysis of 717 settled games shows Grade A hits NRFI at 61% when both recentERAs are present vs ~51% (near baseline) when they're not. Only ~24% of games have both recentERAs available (requires ≥2 qualifying starts in the current season).
 
 OPS (`homeOPS`, `awayOPS`) and K% are stored in DynamoDB. K% not yet used in scoring.
 

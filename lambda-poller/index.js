@@ -188,21 +188,24 @@ const fetchRecentERA = async (personId, season) => {
 const effectiveERA = (seasonERA, recentERA) => {
   if (recentERA == null) return seasonERA;
   if (seasonERA == null) return recentERA;
-  return Math.round((0.6 * seasonERA + 0.4 * recentERA) * 100) / 100;
+  return Math.round((0.2 * seasonERA + 0.8 * recentERA) * 100) / 100;
 };
 
 // ── NRFI Grade ────────────────────────────────────────────────────────────────
-const nrfiGrade = ({ homeERA, awayERA, homeOPS, awayOPS, pf }) => {
-  const hERA = homeERA ?? 4.5; const aERA = awayERA ?? 4.5;
+const nrfiGrade = ({ homeERA, awayERA, homeRecentERA, awayRecentERA, homeOPS, awayOPS, pf }) => {
+  const hEff = effectiveERA(homeERA, homeRecentERA) ?? 4.5;
+  const aEff = effectiveERA(awayERA, awayRecentERA) ?? 4.5;
   const hOPS = homeOPS ?? 0.73; const aOPS = awayOPS ?? 0.73;
   let s = 100;
-  s -= Math.max(0, (Math.max(hERA, aERA) - 4.0) * 20);
-  s -= Math.max(0, ((hERA + aERA) / 2 - 4.0) * 8);
+  s -= Math.max(0, (Math.max(hEff, aEff) - 4.0) * 20);
+  s -= Math.max(0, ((hEff + aEff) / 2 - 4.0) * 8);
   s -= (pf - 1.0) * 60;
   s -= Math.max(0, (Math.max(hOPS, aOPS) - 0.720) * 200);
   s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.670) * 120);
   s = Math.round(Math.max(0, Math.min(100, s)));
-  return { score: s, grade: s >= 80 ? "A" : s >= 58 ? "B" : s >= 42 ? "C" : "D" };
+  const hasBothRecent = homeRecentERA != null && awayRecentERA != null;
+  const grade = (s >= 80 && hasBothRecent) ? "A" : s >= 58 ? "B" : s >= 42 ? "C" : "D";
+  return { score: s, grade };
 };
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -272,7 +275,7 @@ exports.handler = async () => {
           const avgERA   = ((homeERA ?? 4.5) + (awayERA ?? 4.5)) / 2;
 
           const { score, grade } = nrfiGrade({
-            homeERA: effectiveERA(homeERA, homeRecentERA), awayERA: effectiveERA(awayERA, awayRecentERA),
+            homeERA, awayERA, homeRecentERA, awayRecentERA,
             homeOPS: homeTeamStats?.ops ?? null, awayOPS: awayTeamStats?.ops ?? null,
             pf,
           });
