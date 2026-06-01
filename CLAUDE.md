@@ -21,22 +21,24 @@ Tracks "No Run First Inning" (NRFI) betting angles for MLB games. For each day's
 |---|---|
 | Schedule + probable pitchers | `statsapi.mlb.com/api/v1/schedule?sportId=1&date={date}&hydrate=probablePitcher,team,venue` |
 | Pitcher ERA/WHIP | `statsapi.mlb.com/api/v1/people/{id}/stats?stats=season&group=pitching&season={year}` |
-| Pitcher recent ERA (last 3 starts) | `statsapi.mlb.com/api/v1/people/{id}/stats?stats=gameLog&group=pitching&season={year}` — last 3 starts ≥1 IP; blended 60/40 with season ERA |
+| Pitcher recent ERA (last 3 starts) | `statsapi.mlb.com/api/v1/people/{id}/stats?stats=gameLog&group=pitching&season={year}` — last 3 starts ≥1 IP; blended 20/80 with season ERA |
 | Team hitting stats (OPS, K%) | `statsapi.mlb.com/api/v1/teams/{teamId}/stats?stats=season&group=hitting&season={year}` — falls back to prior season if current season unavailable |
 | Live first-inning linescore | `statsapi.mlb.com/api/v1/game/{gamePk}/linescore` |
-| Weather (temp, wind, rain) | `api.open-meteo.com` — free, no key, supports 16-day forecast |
+| Weather (temp, wind, rain) | `api.open-meteo.com` — free, no key, supports 16-day forecast. Weather is fetched and stored but **not used in scoring** (Pearson r = +0.002, noise). Still displayed as UI pills on cards. |
 
 ## NRFI Scoring Logic (`nrfiGrade` in App.js)
-Rebuilt after signal analysis of 564 settled 2026 games (Pearson r). Only ERA and OPS have measurable correlation to NRFI outcomes; WHIP (r=−0.021) and weather (r=+0.002) are noise and removed.
+Rebuilt after signal analysis of 717 settled 2026 games (Pearson r). Only ERA and OPS have measurable correlation to NRFI outcomes; WHIP (r=−0.021) and weather (r=+0.002) are noise and removed from scoring.
+
+`nrfiGrade` now accepts raw ERA values (`homeERA`, `awayERA`, `homeRecentERA`, `awayRecentERA`) and computes `effectiveERA` internally before scoring. Call sites pass the raw values; do not pre-blend before calling.
 
 Starts at 100, subtracts penalties:
-- Weak-link ERA: `max(0, (max(homeERA, awayERA) - 4.0) * 20)` — worst starter drives the penalty; threshold 4.0 (stricter than league avg 4.5)
-- Avg ERA secondary: `max(0, (avgERA - 4.0) * 8)` — smaller multiplier, adds signal when both starters are mediocre
+- Weak-link ERA: `max(0, (max(homeEffERA, awayEffERA) - 4.0) * 20)` — worst starter drives the penalty; threshold 4.0 (stricter than league avg 4.5)
+- Avg ERA secondary: `max(0, (avgEffERA - 4.0) * 8)` — smaller multiplier, adds signal when both starters are mediocre
 - Park factor penalty: `(pf - 1.0) * 60`
 - Hot lineup: `max(0, (max(homeOPS, awayOPS) - 0.720) * 200)` — worst lineup; OPS above 0.720 penalized
 - Avg lineup: `max(0, (avgOPS - 0.670) * 120)` — secondary; penalizes when both lineups are above avg
 
-Grades: A ≥ 80, B ≥ 58, C ≥ 42, D < 42
+Grades: A ≥ 80 (with data gate below), B ≥ 58, C ≥ 42, D < 42
 
 **Recent ERA blending**: `effectiveERA = 0.2 * seasonERA + 0.8 * recentERA` — `recentERA` computed from last 3 qualifying starts (≥1 IP each) via `stats=gameLog`; requires ≥2 starts of data; falls back to season ERA gracefully. Recent form is weighted 80% because it is ~20× more predictive than season ERA (r=−0.13 vs r=−0.006 for home pitcher). Note: `stats=statSplits&sitCodes=i1` (first-inning splits) was found to return empty data for all tested pitchers and was replaced by this approach.
 
@@ -45,6 +47,7 @@ Grades: A ≥ 80, B ≥ 58, C ≥ 42, D < 42
 OPS (`homeOPS`, `awayOPS`) and K% are stored in DynamoDB. K% not yet used in scoring.
 
 ## Weather Scoring (`calcWeatherDelta`)
+Weather is still fetched, stored, and displayed as UI pills (temp, wind, rain chance) but the delta is **not applied to the NRFI score** — analysis showed r = +0.002 (noise).
 - Temp < 40°F → +10, < 50°F → +6, < 55°F → +3
 - Temp > 90°F → −4, > 82°F → −2
 - Wind ≥ 8mph blowing OUT toward CF → negative delta (bad for NRFI)
@@ -76,6 +79,14 @@ Users can pick NRFI or YRFI per game before first pitch. Picks are locked once g
 - Crowd distribution bar shown on each card
 - Model Performance panel shows crowd pick % and accuracy per grade
 
+## Chat
+- Real-time WebSocket chat sidebar; visible once a date is loaded
+- WebSocket API: `wss://q56kgtnct0.execute-api.us-east-1.amazonaws.com/production`
+- Messages stored in DynamoDB table `nrfi-chat` (PK: `date` String, SK: `sortKey` = `{sentAt}#{randomId}`)
+- Connections tracked in DynamoDB table `nrfi-connections`
+- Nickname shared with crowd picks (`localStorage` key `nrfi-nickname`)
+- As of May 2026: 20 total messages across 9 days from 6 unique users
+
 ## Outcome Storage (DynamoDB)
 Every game load saves predictions + eventual results to DynamoDB for model training.
 
@@ -83,9 +94,13 @@ Every game load saves predictions + eventual results to DynamoDB for model train
 |---|---|
 | DynamoDB table | `nrfi-outcomes` (us-east-1), PK = `gamePk` (String), on-demand billing |
 | DynamoDB table | `nrfi-picks` (us-east-1), PK = `gamePk` (String), SK = `userUuid` (String), TTL = 1 year |
-| Lambda | `nrfi-outcomes` (Node.js 18, SDK v3 bundled) — source in `lambda/index.js` |
+| DynamoDB table | `nrfi-chat` (us-east-1), PK = `date` String, SK = `sortKey` String |
+| DynamoDB table | `nrfi-connections` (us-east-1) — WebSocket connection tracking |
+| Lambda | `nrfi-outcomes` (Node.js 18, SDK v3 bundled, **15s timeout**) — source in `lambda/index.js` |
 | API Gateway | HTTP API `q0jutr0ldh` → custom domain `https://api.nrfipro.com` |
 | IAM role | `nrfi-lambda-role` |
+
+**Lambda timeout note**: `nrfi-outcomes` was originally set to 3s. Raised to 15s in May 2026 after the table grew to 970+ records and DynamoDB Scan started intermittently exceeding the limit, causing "MODEL STATS UNAVAILABLE" errors in the UI.
 
 **CORS:** API Gateway `q0jutr0ldh` CORS is configured to allow `https://app.nrfipro.com`, `https://kuplootus.com`, `https://www.kuplootus.com`, `http://localhost:3000`.
 
@@ -98,6 +113,8 @@ Every game load saves predictions + eventual results to DynamoDB for model train
 
 **DynamoDB `nrfi-outcomes` record fields:**
 `gamePk, season, gameType, date, homeTeam, awayTeam, venue, homePitcher, awayPitcher, homeERA, awayERA, homeWHIP, awayWHIP, parkFactor, weatherDelta, predictedScore, predictedGrade, eraPenalty, parkPenalty, homeOPS, awayOPS, homeKPct, awayKPct, homeRecentERA, awayRecentERA, actualNRFI?, totalRuns?, awayRuns?, homeRuns?, updatedAt`
+
+Note: `homeFirstInningERA` / `awayFirstInningERA` were renamed to `homeRecentERA` / `awayRecentERA` in May 2026. Older records may still have the old field names but the poller and frontend now write the new names only.
 
 **`gameType` values:** `R`=regular season, `S`=spring training, `E`=exhibition, `F`/`D`/`L`/`W`=postseason. **Important:** The MLB API sometimes mislabels minor league / affiliate games as `R`. Model Performance filters on BOTH `gameType === "R"` AND `date >= {season}-03-25` to guard against this.
 
@@ -135,8 +152,9 @@ aws lambda update-function-code --function-name nrfi-poller --zip-file fileb://f
 - **Scroll behavior**: `window.scrollTo({ top: 0, behavior: "instant" })` + offset by measured header height on load
 - **Game cards**: Show pitcher ERA/WHIP, park factor, weather pills, lineup quality (OPS/K%), score breakdown panel, crowd pick section, NRFI/YRFI result banner
 - **Indoor stadiums**: Show "🏟 INDOOR" pill; hide all weather pills; `isIndoor` derived from venue name as fallback if weather fetch fails
-- **Model Performance panel**: Shows per-grade NRFI rate, crowd pick %, and crowd accuracy; positioned above game cards
+- **Model Performance panel**: Shows per-grade NRFI rate, crowd pick %, and crowd accuracy; positioned above game cards. Grade A shows "score ≥ 80 · both recent ERA" as the range description.
 - **Chat sidebar**: Visible once a date is loaded; uses same nickname as crowd picks
+- **Error handling**: `ErrorBoundary` component wraps `ModelStatsPanel`; shows "MODEL STATS UNAVAILABLE · REFRESH TO RETRY" if Lambda returns non-array (e.g. cold-start timeout). `ModelStatsPanel` also has explicit `fetchError` state for the same scenario.
 
 ## SEO & Social Sharing
 - `public/index.html` has full Open Graph + Twitter Card meta tags
@@ -150,6 +168,19 @@ aws lambda update-function-code --function-name nrfi-poller --zip-file fileb://f
 - To backfill `gameType` on existing records: scan `nrfi-outcomes` for records missing `gameType`, call `statsapi.mlb.com/api/v1/schedule?gamePks={pk}` in batches, update each record (run script from `lambda/` directory so AWS SDK is available)
 - **UTC vs ET date bug**: MLB `gameDate` is UTC ISO. Evening ET games (e.g. 9:45pm ET = 1:45am UTC next day) were previously stored under the wrong date. Fixed in poller: `gameETDate(gameIso)` derives ET date using `toLocaleDateString("en-CA", { timeZone: "America/New_York" })`. The `#dt` field in UpdateCommand no longer uses `if_not_exists` so poller auto-corrects stale dates.
 
+## Model Performance (as of May 2026, 717 settled regular-season games)
+Grade distribution and NRFI rates using the current formula (recomputed from stored factors):
+| Grade | NRFI Rate | Games | vs Baseline |
+|---|---|---|---|
+| A | 61.3% | 62 | +11% |
+| B | 50.9% | 373 | ~baseline |
+| C | 52.4% | 82 | ~baseline |
+| D | 45.1% | 206 | −5% |
+
+Baseline NRFI rate: ~50.3%. Grade A only fires when both pitchers have recentERA (≥2 qualifying starts logged), which covers ~24% of games. Key Pearson r values: `awayRecentERA` r=−0.135, `homeRecentERA` r=−0.103, `homeOPS` r=−0.067, `parkFactor` r=−0.064, `homeERA` (season) r=−0.006 (essentially noise).
+
+A chart of rolling 14-day grade performance is saved at `grade_performance_2026.png` in the project root. Regenerate with `python3 /tmp/nrfi_grade_chart.py` (requires `matplotlib`, `numpy`).
+
 ## Benny's Bet Report
 A styled HTML report correlating sportsbook bets with NRFI outcomes, deployed to `https://app.nrfipro.com/bbr`.
 
@@ -157,7 +188,8 @@ A styled HTML report correlating sportsbook bets with NRFI outcomes, deployed to
 - **Input**: `~/Downloads/All_Bets_Export.xls` (SpreadsheetML XML exported from sportsbook)
 - **Run command**: `python3 scripts/bet-report.py`
 - **Output**: Terminal table + deploys HTML to S3 key `bbr` (no extension, `Content-Type: text/html`)
-- **Sections**: Grade A bets and Other grade bets, each with subtotal; summary bar shows separate stats for each
+- **Sections**: Grade A NRFI bets, Other grade NRFI bets, and YRFI bets (Over 0.5 market), each with subtotal; summary bar shows separate stats for each section
+- **YRFI bets**: Filtered by `'Over 0.5' in Market`; result colors are flipped (green = run scored = win)
 - **Date matching**: Exact match first; for SETTLED bets only, check ±1 day (handles UTC offset); OPEN bets never use fuzzy matching (shows "Pending" if no exact match)
 
 ## Deploy Command
@@ -168,10 +200,11 @@ aws cloudfront create-invalidation --distribution-id E1JFGP2WTX58XO --paths "/*"
 ```
 
 ## Key Files
-- `src/App.js` — entire frontend app (single file, ~1280 lines)
-- `lambda/index.js` — outcomes + picks API Lambda
-- `lambda-poller/index.js` — scheduled poller Lambda (every 20 min)
+- `src/App.js` — entire frontend app (single file, ~1272 lines)
+- `lambda/index.js` — outcomes + picks API Lambda (15s timeout)
+- `lambda-poller/index.js` — scheduled poller Lambda (every 20 min, 120s timeout)
 - `scripts/bet-report.py` — Benny's Bet Report: correlates sportsbook XLS export with DynamoDB outcomes, deploys to `app.nrfipro.com/bbr`
+- `grade_performance_2026.png` — rolling 14-day grade performance chart for 2026 season
 - `public/logo.png` + `src/logo.png` — app logo (keep in sync, regenerate favicon/logo192/logo512 with Pillow when updated)
 - `public/og-image.png` — 1200×630 social sharing image (logo centered on `#0a1628` background, generated with Pillow)
 - `mockup-card.html` — standalone card UI mockup
