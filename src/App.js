@@ -28,25 +28,119 @@ const getPF = (venue = "") => {
   return 1.0;
 };
 // Scoring rebuilt on signal analysis of 717 settled 2026 games.
-// recentERA is the dominant signal (r=-0.103 to -0.135); season ERA is noise for home pitcher (r=-0.006).
-// Grade A requires both pitchers to have recentERA — without it there is insufficient signal to be confident.
+// Recent pitcher form is the strongest signal, and the model now uses a probability-style score
+// that can be calibrated from historical outcomes instead of relying only on hard thresholds.
 const GRADE_COLORS = { A:"#00e5a0", B:"#f5c842", C:"#ff9f43", D:"#ff4d6d" };
 const GRADE_LABELS = { A:"Strong NRFI", B:"Lean NRFI", C:"Toss-Up", D:"Risky NRFI" };
-const nrfiGrade = ({ homeERA, awayERA, homeRecentERA, awayRecentERA, homeOPS, awayOPS, pf }) => {
+const clamp = (min, max, value) => Math.min(max, Math.max(min, value));
+
+const effectiveERA = (seasonERA, recentERA) => {
+  if (recentERA == null) return seasonERA;
+  if (seasonERA == null) return recentERA;
+  return Math.round((0.2 * seasonERA + 0.8 * recentERA) * 100) / 100;
+};
+
+export const buildNrfiProbability = ({ homeERA, awayERA, homeRecentERA, awayRecentERA, homeOPS, awayOPS, pf }) => {
   const hEff = effectiveERA(homeERA, homeRecentERA) ?? 4.5;
   const aEff = effectiveERA(awayERA, awayRecentERA) ?? 4.5;
-  const hOPS = homeOPS ?? 0.73; const aOPS = awayOPS ?? 0.73;
-  let s = 100;
-  s -= Math.max(0, (Math.max(hEff, aEff) - 4.0) * 20);       // weak-link ERA
-  s -= Math.max(0, ((hEff + aEff) / 2 - 4.0) * 8);            // avg ERA secondary
-  s -= (pf - 1.0) * 60;                                         // park factor
-  s -= Math.max(0, (Math.max(hOPS, aOPS) - 0.720) * 200);     // hot lineup
-  s -= Math.max(0, ((hOPS + aOPS) / 2 - 0.670) * 120);        // avg lineup
-  s = Math.round(Math.max(0, Math.min(100, s)));
-  // Grade A requires both pitchers to have recentERA; without it, cap at B
+  const hOPS = homeOPS ?? 0.73;
+  const aOPS = awayOPS ?? 0.73;
   const hasBothRecent = homeRecentERA != null && awayRecentERA != null;
-  const g = (s >= 80 && hasBothRecent) ? "A" : s >= 58 ? "B" : s >= 42 ? "C" : "D";
-  return { g, c: GRADE_COLORS[g], l: GRADE_LABELS[g], s };
+
+  let score = 50;
+  score += (4.0 - Math.max(hEff, aEff)) * 14;
+  score += (4.0 - (hEff + aEff) / 2) * 8;
+  score += (1.0 - pf) * 18;
+  score += (0.72 - Math.max(hOPS, aOPS)) * 22;
+  score += (0.67 - (hOPS + aOPS) / 2) * 16;
+  score += hasBothRecent ? 4 : -1.5;
+
+  return clamp(0.05, 0.95, 0.5 + (score - 50) / 120);
+};
+
+export const buildHistoricalCalibration = (records = []) => {
+  const buckets = Array.from({ length: 10 }, () => ({ total: 0, nrfi: 0 }));
+  records.forEach((record) => {
+    const raw = buildNrfiProbability({
+      homeERA: record.homeERA,
+      awayERA: record.awayERA,
+      homeRecentERA: record.homeRecentERA,
+      awayRecentERA: record.awayRecentERA,
+      homeOPS: record.homeOPS,
+      awayOPS: record.awayOPS,
+      pf: record.parkFactor ?? record.pf ?? 1.0,
+    });
+    const bucket = Math.min(9, Math.max(0, Math.floor(raw * 10)));
+    buckets[bucket].total += 1;
+    if (record.actualNRFI) buckets[bucket].nrfi += 1;
+  });
+
+  return buckets.map((bucket) => {
+    if (!bucket.total) return 0.5;
+    const prior = 3;
+    return clamp(0.05, 0.95, (bucket.nrfi + prior * 0.5) / (bucket.total + prior));
+  });
+};
+
+export const calibrateProbability = (probability, calibration = null) => {
+  if (!Array.isArray(calibration) || !calibration.length) return probability;
+  const bucket = Math.min(9, Math.max(0, Math.floor(probability * 10)));
+  const nextBucket = Math.min(9, bucket + 1);
+  const lower = calibration[bucket] ?? 0.5;
+  const upper = calibration[nextBucket] ?? lower;
+  const start = bucket / 10;
+  const end = nextBucket / 10;
+  const span = end - start || 1;
+  const weight = end === start ? 0 : (probability - start) / span;
+  return clamp(0.05, 0.95, lower + (upper - lower) * weight);
+};
+
+export const nrfiGrade = ({ homeERA, awayERA, homeRecentERA, awayRecentERA, homeOPS, awayOPS, pf, calibration = null }) => {
+  const rawProbability = buildNrfiProbability({ homeERA, awayERA, homeRecentERA, awayRecentERA, homeOPS, awayOPS, pf });
+  const probability = calibrateProbability(rawProbability, calibration);
+  const score = Math.round(probability * 100);
+  const hasBothRecent = homeRecentERA != null && awayRecentERA != null;
+  const g = (score >= 60 && hasBothRecent) ? "A" : score >= 48 ? "B" : score >= 40 ? "C" : "D";
+  return { g, c: GRADE_COLORS[g], l: GRADE_LABELS[g], s: score };
+};
+
+export const buildWeeklyPerformance = (records = []) => {
+  const buckets = new Map();
+  const grades = ["A", "B", "C", "D"];
+  records.forEach((record) => {
+    const date = record.date || record.gameDate || record.gameIso || "";
+    if (!date) return;
+    const d = new Date(`${date}T12:00:00`);
+    const day = d.getDay();
+    const start = new Date(d);
+    start.setDate(d.getDate() - ((day + 6) % 7));
+    const key = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+    const bucket = buckets.get(key) || {
+      week: key,
+      grades: Object.fromEntries(grades.map((grade) => [grade, { total: 0, nrfi: 0 }])),
+    };
+
+    const grade = record.predictedGrade || "D";
+    if (bucket.grades[grade]) {
+      bucket.grades[grade].total += 1;
+      if (record.actualNRFI === true || record.actualNRFI === "true") bucket.grades[grade].nrfi += 1;
+    }
+    buckets.set(key, bucket);
+  });
+
+  return [...buckets.values()]
+    .sort((a, b) => a.week.localeCompare(b.week))
+    .map((bucket) => ({
+      week: bucket.week,
+      grades: Object.fromEntries(grades.map((grade) => {
+        const stats = bucket.grades[grade] || { total: 0, nrfi: 0 };
+        return [grade, {
+          total: stats.total,
+          nrfi: stats.nrfi,
+          rate: stats.total ? stats.nrfi / stats.total : null,
+        }];
+      })),
+    }));
 };
 
 // ── Stadium Data ──────────────────────────────────────────────────────────────
@@ -499,14 +593,6 @@ const fetchRecentERA = async (personId, season) => {
   } catch { return null; }
 };
 
-// Blend season ERA with recent form ERA. Recent form is the dominant signal (r=-0.13 vs r=-0.006),
-// so weighted 80%. Season ERA provides a floor when recent data is thin.
-const effectiveERA = (seasonERA, recentERA) => {
-  if (recentERA == null) return seasonERA;
-  if (seasonERA == null) return recentERA;
-  return Math.round((0.2 * seasonERA + 0.8 * recentERA) * 100) / 100;
-};
-
 const formatGameTime = (isoString) => {
   try {
     return new Date(isoString).toLocaleTimeString("en-US", {
@@ -633,9 +719,9 @@ const CrowdPickSection = ({ gamePk, gameState, crowdPick, onPick }) => {
   );
 };
 
-const Card = ({ game, idx, crowdPick, onPick }) => {
+const Card = ({ game, idx, crowdPick, onPick, calibration }) => {
   const pf = getPF(game.venue);
-  const nr = nrfiGrade({ homeERA:game.homeERA, awayERA:game.awayERA, homeRecentERA:game.homeRecentERA, awayRecentERA:game.awayRecentERA, homeOPS:game.homeOPS, awayOPS:game.awayOPS, pf });
+  const nr = nrfiGrade({ homeERA:game.homeERA, awayERA:game.awayERA, homeRecentERA:game.homeRecentERA, awayRecentERA:game.awayRecentERA, homeOPS:game.homeOPS, awayOPS:game.awayOPS, pf, calibration });
   const avgERA = game.homeERA != null && game.awayERA != null ? ((game.homeERA + game.awayERA) / 2).toFixed(2) : null;
   const pfPct = ((pf - 1) * 100).toFixed(0);
   const pfc = pf > 1.05 ? "#ff4d6d" : pf < 0.97 ? "#00e5a0" : "#4a6080";
@@ -673,7 +759,7 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
           <div style={{marginTop:5,width:"100%",height:3,borderRadius:2,background:"#0a1520",overflow:"hidden"}}>
             <div style={{width:`${nr.s}%`,height:"100%",background:nr.c,borderRadius:2}}/>
           </div>
-          <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",marginTop:2}}>{nr.s}/100</span>
+          <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",marginTop:2}}>{nr.s}%</span>
         </div>
       </div>
 
@@ -706,22 +792,21 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
         const hEffERA     = effectiveERA(game.homeERA, game.homeRecentERA) ?? 4.5;
         const aEffERA     = effectiveERA(game.awayERA, game.awayRecentERA) ?? 4.5;
         const hOPS2       = game.homeOPS ?? 0.73; const aOPS2 = game.awayOPS ?? 0.73;
-        const weakLinkERAP = Math.max(0, (Math.max(hEffERA, aEffERA) - 4.0) * 20);
-        const avgERAP      = Math.max(0, ((hEffERA + aEffERA) / 2 - 4.0) * 8);
-        const parkP        = (pf - 1.0) * 60;
-        const hotOPSP      = Math.max(0, (Math.max(hOPS2, aOPS2) - 0.720) * 200);
-        const avgOPSP      = Math.max(0, ((hOPS2 + aOPS2) / 2 - 0.670) * 120);
+        const weakLinkImpact = (4.0 - Math.max(hEffERA, aEffERA)) * 14;
+        const avgEraImpact   = (4.0 - (hEffERA + aEffERA) / 2) * 8;
+        const parkImpact     = (1.0 - pf) * 18;
+        const lineupImpact   = (0.72 - Math.max(hOPS2, aOPS2)) * 22 + (0.67 - (hOPS2 + aOPS2) / 2) * 16;
+        const recentImpact   = game.homeRecentERA != null && game.awayRecentERA != null ? 4 : -1.5;
         const rows = [
-          { label: "Weak-link ERA", val: -weakLinkERAP, color: "#ff4d6d" },
-          ...(avgERAP > 0 ? [{ label: "Avg ERA",      val: -avgERAP,    color: "#ff9f43" }] : []),
-          ...(hotOPSP > 0 ? [{ label: "Hot lineup",   val: -hotOPSP,    color: "#ff9f43" }] : []),
-          ...(avgOPSP > 0 ? [{ label: "Avg OPS",      val: -avgOPSP,    color: "#ff9f43" }] : []),
-          { label: "Park penalty",  val: -parkP,         color: parkP > 0 ? "#ff9f43" : parkP < 0 ? "#00e5a0" : "#4a6080" },
+          { label: "Pitching", val: weakLinkImpact + avgEraImpact, color: "#00e5a0" },
+          { label: "Park", val: parkImpact, color: parkImpact >= 0 ? "#00e5a0" : "#ff9f43" },
+          { label: "Lineup", val: lineupImpact, color: lineupImpact >= 0 ? "#00e5a0" : "#ff9f43" },
+          { label: "Recent data", val: recentImpact, color: recentImpact >= 0 ? "#00e5a0" : "#ff4d6d" },
         ];
         const maxAbs = Math.max(...rows.map(r => Math.abs(r.val)), 1);
         return (
           <div style={{margin:"10px 0",padding:"10px 12px",background:"#060f18",border:"1px solid #0e1822",borderRadius:8}}>
-            <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:"#4a6080",letterSpacing:1,marginBottom:8}}>SCORE BREAKDOWN · STARTS AT 100</div>
+            <div style={{fontFamily:"'Space Mono',monospace",fontSize:7,color:"#4a6080",letterSpacing:1,marginBottom:8}}>PROBABILITY FACTORS · BASELINE 50</div>
             {rows.map(({ label, val, color }) => (
               <div key={label} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
                 <div style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",width:82,flexShrink:0}}>{label}</div>
@@ -734,12 +819,10 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
               </div>
             ))}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginTop:8,paddingTop:6,borderTop:"1px solid #0e1822"}}>
-              <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",letterSpacing:1}}>FINAL SCORE</span>
+              <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",letterSpacing:1}}>FINAL PROB</span>
               <div style={{display:"flex",alignItems:"baseline",gap:8}}>
-                <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#2a4060"}}>
-                  100 − {weakLinkERAP.toFixed(1)} − {avgERAP.toFixed(1)} {parkP >= 0 ? "−" : "+"} {Math.abs(parkP).toFixed(1)} − {hotOPSP.toFixed(1)} − {avgOPSP.toFixed(1)} =
-                </span>
-                <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:nr.c,lineHeight:1}}>{nr.s}</span>
+                <span style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#2a4060"}}>50 + factors =</span>
+                <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,color:nr.c,lineHeight:1}}>{nr.s}%</span>
               </div>
             </div>
           </div>
@@ -770,10 +853,10 @@ const Card = ({ game, idx, crowdPick, onPick }) => {
 
 // ── Model Stats Panel ─────────────────────────────────────────────────────────
 const GRADE_META = {
-  A: { c: "#00e5a0", l: "Strong NRFI", range: "score ≥ 80 · both recent ERA" },
-  B: { c: "#f5c842", l: "Lean NRFI",   range: "score 58–74" },
-  C: { c: "#ff9f43", l: "Toss-Up",     range: "score 42–57" },
-  D: { c: "#ff4d6d", l: "Risky NRFI",  range: "score < 42"  },
+  A: { c: "#00e5a0", l: "Strong NRFI", range: "prob ≥ 60 · both recent ERA" },
+  B: { c: "#f5c842", l: "Lean NRFI",   range: "prob 48–59" },
+  C: { c: "#ff9f43", l: "Toss-Up",     range: "prob 40–47" },
+  D: { c: "#ff4d6d", l: "Risky NRFI",  range: "prob < 40"  },
 };
 
 const ModelStatsPanel = ({ season }) => {
@@ -813,6 +896,7 @@ const ModelStatsPanel = ({ season }) => {
 
   const stats = { A:{nrfi:0,total:0}, B:{nrfi:0,total:0}, C:{nrfi:0,total:0}, D:{nrfi:0,total:0} };
   let totalNRFI = 0;
+  const weeklyPerformance = buildWeeklyPerformance(regularSeason);
   regularSeason.forEach(r => {
     const g = r.predictedGrade;
     if (stats[g]) { stats[g].total++; if (r.actualNRFI) { stats[g].nrfi++; totalNRFI++; } }
@@ -852,6 +936,19 @@ const ModelStatsPanel = ({ season }) => {
             <span style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#2a4060",letterSpacing:1,marginLeft:"auto"}}>↑ ABOVE BASELINE · ~ NEAR · ↓ BELOW</span>
           </>}
         </div>
+
+        {weeklyPerformance.length > 1 && (
+          <div style={{marginBottom:18,padding:"14px 16px",background:"#060f18",border:"1px solid #0e1822",borderRadius:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,flexWrap:"wrap",gap:10}}>
+              <div>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:2,color:"#e0eaf4"}}>WEEKLY NRFI TREND</div>
+                <div style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#4a6080",letterSpacing:1,marginTop:2}}>NRFI RATE WITHIN EACH GRADE EACH WEEK</div>
+              </div>
+              <div style={{fontFamily:"'Space Mono',monospace",fontSize:8,color:"#2a4060",letterSpacing:1}}>ONE LINE PER GRADE · EACH POINT = 1 WEEK</div>
+            </div>
+            <WeeklyPerformanceChart data={weeklyPerformance}/>
+          </div>
+        )}
 
         {totalGames === 0 ? (
           <div style={{textAlign:"center",padding:"20px 0",fontFamily:"'Space Mono',monospace",fontSize:10,color:"#2a4060",letterSpacing:1}}>
@@ -931,6 +1028,54 @@ const ModelStatsPanel = ({ season }) => {
   );
 };
 
+const WeeklyPerformanceChart = ({ data }) => {
+  const width = 720;
+  const height = 180;
+  const padding = 24;
+  const grades = ["A", "B", "C", "D"];
+  const pointsByGrade = grades.map((grade) => {
+    const points = data.map((d, i) => {
+      const x = padding + (i / Math.max(1, data.length - 1)) * (width - padding * 2);
+      const rate = d.grades?.[grade]?.rate;
+      const y = rate == null ? null : height - padding - rate * (height - padding * 2);
+      return { x, y, rate, week: d.week };
+    });
+
+    const linePath = points.filter((p) => p.y != null).map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    const dots = points.filter((p) => p.y != null).map((p) => `<circle cx="${p.x}" cy="${p.y}" r="3.5" fill="${GRADE_COLORS[grade]}" />`).join("");
+    return { grade, points, linePath, dots };
+  });
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} style={{background:"#060f18",borderRadius:8,border:"1px solid #0e1822"}}>
+        {[0, 0.25, 0.5, 0.75, 1].map((tick) => {
+          const y = height - padding - tick * (height - padding * 2);
+          return <g key={tick}><line x1={padding} y1={y} x2={width - padding} y2={y} stroke="#1a2e42" strokeDasharray="3 3" /><text x={8} y={y + 4} fill="#4a6080" fontSize="10" fontFamily="'Space Mono',monospace">{Math.round(tick * 100)}%</text></g>;
+        })}
+        {pointsByGrade.map(({ grade, linePath, dots }) => (
+          <g key={grade}>
+            {linePath && <path d={linePath} fill="none" stroke={GRADE_COLORS[grade]} strokeWidth="2.4" />}
+            {dots && <g dangerouslySetInnerHTML={{ __html: dots }} />}
+          </g>
+        ))}
+        {data.map((d, i) => {
+          const x = padding + (i / Math.max(1, data.length - 1)) * (width - padding * 2);
+          return <text key={d.week} x={x} y={height - 6} textAnchor="middle" fill="#4a6080" fontSize="10" fontFamily="'Space Mono',monospace">{new Date(`${d.week}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</text>;
+        })}
+      </svg>
+      <div style={{display:"flex",gap:12,marginTop:10,flexWrap:"wrap"}}>
+        {grades.map((grade) => (
+          <div key={grade} style={{display:"flex",alignItems:"center",gap:6}}>
+            <span style={{width:10,height:10,borderRadius:"50%",background:GRADE_COLORS[grade],display:"inline-block"}}/>
+            <span style={{fontFamily:"'Space Mono',monospace",fontSize:9,color:"#8899aa"}}>Grade {grade}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [games,    setGames]    = useState([]);
@@ -938,6 +1083,7 @@ export default function App() {
   const [status,   setStatus]   = useState("");
   const [error,    setError]    = useState(null);
   const [date,     setDate]     = useState(() => new Date().toLocaleDateString("en-CA"));
+  const [calibration, setCalibration] = useState(null);
   const sortBy = "grade";
   const [fetched,  setFetched]  = useState(false);
 
@@ -959,10 +1105,15 @@ export default function App() {
     const season = d.slice(0, 4);
 
     try {
-      // ── Step 1: Fetch schedule ────────────────────────────────────────────
+      // ── Step 1: Fetch schedule + historical calibration ─────────────────
       setStatus("FETCHING SCHEDULE...");
-      const schedData = await fetchSchedule(d);
+      const [schedData, historyData] = await Promise.all([
+        fetchSchedule(d),
+        fetch(`${OUTCOMES_API}/outcomes?season=${season}`).then(r => r.json()).catch(() => []),
+      ]);
       const rawGames = schedData.dates?.[0]?.games ?? [];
+      const calibrationData = Array.isArray(historyData) ? buildHistoricalCalibration(historyData.filter(r => r.actualNRFI != null)) : null;
+      setCalibration(calibrationData);
 
       if (!rawGames.length) {
         setGames([]); setFetched(true); setLoading(false); setStatus(""); return;
@@ -1056,6 +1207,7 @@ export default function App() {
           homeRecentERA: g.homeRecentERA, awayRecentERA: g.awayRecentERA,
           homeOPS: g.homeOPS, awayOPS: g.awayOPS,
           pf,
+          calibration: calibrationData,
         });
         if (g.firstInning) {
           recordResult(g.gamePk, g.firstInning, score, grade, season, g);
@@ -1086,7 +1238,7 @@ export default function App() {
 
   const gradeOf = (g) => {
     const pf = getPF(g.venue);
-    return nrfiGrade({ homeERA:g.homeERA, awayERA:g.awayERA, homeRecentERA:g.homeRecentERA, awayRecentERA:g.awayRecentERA, homeOPS:g.homeOPS, awayOPS:g.awayOPS, pf });
+    return nrfiGrade({ homeERA:g.homeERA, awayERA:g.awayERA, homeRecentERA:g.homeRecentERA, awayRecentERA:g.awayRecentERA, homeOPS:g.homeOPS, awayOPS:g.awayOPS, pf, calibration });
   };
 
   const sorted = [...games].sort((a, b) =>
@@ -1241,7 +1393,7 @@ export default function App() {
         )}
         {!loading && sorted.length > 0 && (
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:20}}>
-            {sorted.map((g, i) => <Card key={g.id || i} game={g} idx={i} crowdPick={crowdPicks[String(g.gamePk)]} onPick={handlePick}/>)}
+            {sorted.map((g, i) => <Card key={g.id || i} game={g} idx={i} crowdPick={crowdPicks[String(g.gamePk)]} onPick={handlePick} calibration={calibration}/>)}
           </div>
         )}
         </div>{/* end main content column */}

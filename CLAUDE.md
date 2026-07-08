@@ -27,24 +27,24 @@ Tracks "No Run First Inning" (NRFI) betting angles for MLB games. For each day's
 | Weather (temp, wind, rain) | `api.open-meteo.com` — free, no key, supports 16-day forecast. Weather is fetched and stored but **not used in scoring** (Pearson r = +0.002, noise). Still displayed as UI pills on cards. |
 
 ## NRFI Scoring Logic (`nrfiGrade` in App.js)
-Rebuilt after signal analysis of 717 settled 2026 games (Pearson r). Only ERA and OPS have measurable correlation to NRFI outcomes; WHIP (r=−0.021) and weather (r=+0.002) are noise and removed from scoring.
+The model now uses a probability-style scoring approach rather than the earlier fixed-point penalty formula. It starts from a base signal based on pitcher quality, recent ERA form, lineup strength, and park factor, then calibrates that score using historical outcomes from the saved outcomes API so it trends toward the actual NRFI rate seen in past games.
 
-`nrfiGrade` now accepts raw ERA values (`homeERA`, `awayERA`, `homeRecentERA`, `awayRecentERA`) and computes `effectiveERA` internally before scoring. Call sites pass the raw values; do not pre-blend before calling.
+Key inputs:
+- Effective starter quality from season ERA + recent ERA (`recentERA` weighted heavily when present)
+- Worst-starter pressure and average-starter pressure
+- Park factor
+- Lineup OPS pressure from the stronger lineup and the average lineup
+- Whether both pitchers have recent ERA data available
 
-Starts at 100, subtracts penalties:
-- Weak-link ERA: `max(0, (max(homeEffERA, awayEffERA) - 4.0) * 20)` — worst starter drives the penalty; threshold 4.0 (stricter than league avg 4.5)
-- Avg ERA secondary: `max(0, (avgEffERA - 4.0) * 8)` — smaller multiplier, adds signal when both starters are mediocre
-- Park factor penalty: `(pf - 1.0) * 60`
-- Hot lineup: `max(0, (max(homeOPS, awayOPS) - 0.720) * 200)` — worst lineup; OPS above 0.720 penalized
-- Avg lineup: `max(0, (avgOPS - 0.670) * 120)` — secondary; penalizes when both lineups are above avg
+Grade thresholds are now probability-based rather than the old 100-point scale:
+- A: probability ≥ 60% and both recent ERAs available
+- B: probability 48–59%
+- C: probability 40–47%
+- D: probability < 40%
 
-Grades: A ≥ 80 (with data gate below), B ≥ 58, C ≥ 42, D < 42
+Recent ERA is still computed from the last 3 qualifying starts (≥1 IP each) via `stats=gameLog`; it requires ≥2 starts of data and falls back gracefully when unavailable. The resulting probability is then calibrated against historical records to reduce overfitting and make the score more stable.
 
-**Recent ERA blending**: `effectiveERA = 0.2 * seasonERA + 0.8 * recentERA` — `recentERA` computed from last 3 qualifying starts (≥1 IP each) via `stats=gameLog`; requires ≥2 starts of data; falls back to season ERA gracefully. Recent form is weighted 80% because it is ~20× more predictive than season ERA (r=−0.13 vs r=−0.006 for home pitcher). Note: `stats=statSplits&sitCodes=i1` (first-inning splits) was found to return empty data for all tested pitchers and was replaced by this approach.
-
-**Grade A data gate**: A game can only receive Grade A if BOTH pitchers have `recentERA` data available. Without both, the grade is capped at B regardless of score. Analysis of 717 settled games shows Grade A hits NRFI at 61% when both recentERAs are present vs ~51% (near baseline) when they're not. Only ~24% of games have both recentERAs available (requires ≥2 qualifying starts in the current season).
-
-OPS (`homeOPS`, `awayOPS`) and K% are stored in DynamoDB. K% not yet used in scoring.
+OPS (`homeOPS`, `awayOPS`) and K% are stored in DynamoDB. K% is not yet used in scoring.
 
 ## Weather Scoring (`calcWeatherDelta`)
 Weather is still fetched, stored, and displayed as UI pills (temp, wind, rain chance) but the delta is **not applied to the NRFI score** — analysis showed r = +0.002 (noise).
@@ -152,7 +152,7 @@ aws lambda update-function-code --function-name nrfi-poller --zip-file fileb://f
 - **Scroll behavior**: `window.scrollTo({ top: 0, behavior: "instant" })` + offset by measured header height on load
 - **Game cards**: Show pitcher ERA/WHIP, park factor, weather pills, lineup quality (OPS/K%), score breakdown panel, crowd pick section, NRFI/YRFI result banner
 - **Indoor stadiums**: Show "🏟 INDOOR" pill; hide all weather pills; `isIndoor` derived from venue name as fallback if weather fetch fails
-- **Model Performance panel**: Shows per-grade NRFI rate, crowd pick %, and crowd accuracy; positioned above game cards. Grade A shows "score ≥ 80 · both recent ERA" as the range description.
+- **Model Performance panel**: Shows per-grade NRFI rate, crowd pick %, and crowd accuracy; positioned above game cards. It also includes a weekly chart showing the NRFI rate within each grade bucket (A–D) so streakiness can be inspected over time.
 - **Chat sidebar**: Visible once a date is loaded; uses same nickname as crowd picks
 - **Error handling**: `ErrorBoundary` component wraps `ModelStatsPanel`; shows "MODEL STATS UNAVAILABLE · REFRESH TO RETRY" if Lambda returns non-array (e.g. cold-start timeout). `ModelStatsPanel` also has explicit `fetchError` state for the same scenario.
 
