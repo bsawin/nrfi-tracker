@@ -69,14 +69,27 @@ exports.handler = async (event) => {
       return res(200, { ok: true });
     }
 
-    // GET /outcomes?season=2026  — fetch completed outcomes for calibration
+    // GET /outcomes?season=2026[&date=2026-07-29] — fetch outcomes for model calibration or a specific date
     if (method === 'GET' && path === '/outcomes') {
       const season = event.queryStringParameters?.season ?? String(new Date().getFullYear());
+      const date   = event.queryStringParameters?.date;
+      let filterExpression = '#s = :s';
+      const expressionAttributeNames = { '#s': 'season' };
+      const expressionAttributeValues = { ':s': season };
+
+      if (date) {
+        filterExpression += ' AND #d = :d';
+        expressionAttributeNames['#d'] = 'date';
+        expressionAttributeValues[':d'] = date;
+      } else {
+        filterExpression += ' AND attribute_exists(actualNRFI)';
+      }
+
       const result = await client.send(new ScanCommand({
         TableName: TABLE,
-        FilterExpression: '#s = :s AND attribute_exists(actualNRFI)',
-        ExpressionAttributeNames: { '#s': 'season' },
-        ExpressionAttributeValues: { ':s': season },
+        FilterExpression: filterExpression,
+        ExpressionAttributeNames: expressionAttributeNames,
+        ExpressionAttributeValues: expressionAttributeValues,
       }));
       return res(200, result.Items ?? []);
     }

@@ -719,9 +719,30 @@ const CrowdPickSection = ({ gamePk, gameState, crowdPick, onPick }) => {
   );
 };
 
+const gradeOf = (g, calibration = null) => {
+  if (g.storedPredictedGrade) {
+    const grade = GRADE_LABELS[g.storedPredictedGrade] ? g.storedPredictedGrade : "D";
+    const storedScore = g.storedPredictedScore != null ? Number(g.storedPredictedScore) : null;
+    const score = Number.isFinite(storedScore) ? Math.round(storedScore) : null;
+    const s = score ?? (grade === "A" ? 60 : grade === "B" ? 53 : grade === "C" ? 44 : 35);
+    return { g: grade, c: GRADE_COLORS[grade], l: GRADE_LABELS[grade], s };
+  }
+  const pf = getPF(g.venue);
+  return nrfiGrade({
+    homeERA: g.homeERA,
+    awayERA: g.awayERA,
+    homeRecentERA: g.homeRecentERA,
+    awayRecentERA: g.awayRecentERA,
+    homeOPS: g.homeOPS,
+    awayOPS: g.awayOPS,
+    pf,
+    calibration,
+  });
+};
+
 const Card = ({ game, idx, crowdPick, onPick, calibration }) => {
   const pf = getPF(game.venue);
-  const nr = nrfiGrade({ homeERA:game.homeERA, awayERA:game.awayERA, homeRecentERA:game.homeRecentERA, awayRecentERA:game.awayRecentERA, homeOPS:game.homeOPS, awayOPS:game.awayOPS, pf, calibration });
+  const nr = gradeOf(game, calibration);
   const avgERA = game.homeERA != null && game.awayERA != null ? ((game.homeERA + game.awayERA) / 2).toFixed(2) : null;
   const pfPct = ((pf - 1) * 100).toFixed(0);
   const pfc = pf > 1.05 ? "#ff4d6d" : pf < 0.97 ? "#00e5a0" : "#4a6080";
@@ -1105,15 +1126,17 @@ export default function App() {
     const season = d.slice(0, 4);
 
     try {
-      // ── Step 1: Fetch schedule + historical calibration ─────────────────
+      // ── Step 1: Fetch schedule + historical calibration + date outcomes ───
       setStatus("FETCHING SCHEDULE...");
-      const [schedData, historyData] = await Promise.all([
+      const [schedData, historyData, dateOutcomeData] = await Promise.all([
         fetchSchedule(d),
         fetch(`${OUTCOMES_API}/outcomes?season=${season}`).then(r => r.json()).catch(() => []),
+        fetch(`${OUTCOMES_API}/outcomes?season=${season}&date=${d}`).then(r => r.json()).catch(() => []),
       ]);
       const rawGames = schedData.dates?.[0]?.games ?? [];
       const calibrationData = Array.isArray(historyData) ? buildHistoricalCalibration(historyData.filter(r => r.actualNRFI != null)) : null;
       setCalibration(calibrationData);
+      const dateOutcomesByPk = Object.fromEntries((Array.isArray(dateOutcomeData) ? dateOutcomeData : []).map((item) => [String(item.gamePk), item]));
 
       if (!rawGames.length) {
         setGames([]); setFetched(true); setLoading(false); setStatus(""); return;
@@ -1167,23 +1190,28 @@ export default function App() {
       const teamStatsMap  = Object.fromEntries(teamStatsEntries);
 
       // ── Step 3: Merge ─────────────────────────────────────────────────────
-      const enriched = gameList.map((g, i) => ({
-        ...g,
-        awayERA:        statsMap[g.awayPitcherId]?.era        ?? null,
-        awayWHIP:       statsMap[g.awayPitcherId]?.whip       ?? null,
-        homeERA:        statsMap[g.homePitcherId]?.era        ?? null,
-        homeWHIP:       statsMap[g.homePitcherId]?.whip       ?? null,
-        homeRecentERA:  recentERAMap[g.homePitcherId]         ?? null,
-        awayRecentERA:  recentERAMap[g.awayPitcherId]         ?? null,
-        awayStatSeason: statsMap[g.awayPitcherId]?.statSeason ?? null,
-        homeStatSeason: statsMap[g.homePitcherId]?.statSeason ?? null,
-        homeOPS:        teamStatsMap[g.homeTeamId]?.ops       ?? null,
-        awayOPS:        teamStatsMap[g.awayTeamId]?.ops       ?? null,
-        homeKPct:       teamStatsMap[g.homeTeamId]?.kPct      ?? null,
-        awayKPct:       teamStatsMap[g.awayTeamId]?.kPct      ?? null,
-        weather:        weatherResults[i],
-        firstInning:    firstInningResults[i],
-      }));
+      const enriched = gameList.map((g, i) => {
+        const storedOutcome = dateOutcomesByPk[String(g.gamePk)];
+        return {
+          ...g,
+          awayERA:        statsMap[g.awayPitcherId]?.era        ?? null,
+          awayWHIP:       statsMap[g.awayPitcherId]?.whip       ?? null,
+          homeERA:        statsMap[g.homePitcherId]?.era        ?? null,
+          homeWHIP:       statsMap[g.homePitcherId]?.whip       ?? null,
+          homeRecentERA:  recentERAMap[g.homePitcherId]         ?? null,
+          awayRecentERA:  recentERAMap[g.awayPitcherId]         ?? null,
+          awayStatSeason: statsMap[g.awayPitcherId]?.statSeason ?? null,
+          homeStatSeason: statsMap[g.homePitcherId]?.statSeason ?? null,
+          homeOPS:        teamStatsMap[g.homeTeamId]?.ops       ?? null,
+          awayOPS:        teamStatsMap[g.awayTeamId]?.ops       ?? null,
+          homeKPct:       teamStatsMap[g.homeTeamId]?.kPct      ?? null,
+          awayKPct:       teamStatsMap[g.awayTeamId]?.kPct      ?? null,
+          weather:        weatherResults[i],
+          firstInning:    firstInningResults[i],
+          storedPredictedGrade: storedOutcome?.predictedGrade ?? null,
+          storedPredictedScore: storedOutcome?.predictedScore ?? null,
+        };
+      });
 
       setGames(enriched);
       setFetched(true);
@@ -1236,16 +1264,11 @@ export default function App() {
     } catch { /* non-critical */ }
   }, [nickname, date]);
 
-  const gradeOf = (g) => {
-    const pf = getPF(g.venue);
-    return nrfiGrade({ homeERA:g.homeERA, awayERA:g.awayERA, homeRecentERA:g.homeRecentERA, awayRecentERA:g.awayRecentERA, homeOPS:g.homeOPS, awayOPS:g.awayOPS, pf, calibration });
-  };
-
   const sorted = [...games].sort((a, b) =>
-    sortBy === "grade" ? gradeOf(b).s - gradeOf(a).s : 0
+    sortBy === "grade" ? gradeOf(b, calibration).s - gradeOf(a, calibration).s : 0
   );
   const counts = games.reduce((acc, g) => {
-    const { g: gr } = gradeOf(g);
+    const { g: gr } = gradeOf(g, calibration);
     acc[gr] = (acc[gr] || 0) + 1; return acc;
   }, {});
 

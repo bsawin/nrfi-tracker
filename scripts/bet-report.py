@@ -39,10 +39,11 @@ NAME_MAP = {
 
 def to_american(decimal_str):
     d = float(decimal_str)
+    if d <= 1.0:
+        return "EVEN"
     if d >= 2.0:
         return f"+{int(round((d - 1) * 100))}"
-    else:
-        return f"{int(round(-100 / (d - 1)))}"
+    return f"{int(round(-100 / (d - 1)))}"
 
 
 def parse_xls(path):
@@ -161,6 +162,8 @@ def build_rows(nrfi_bets, outcomes):
             pl = -wager; total_pl += pl; total_wagered += wager; lost_count += 1
         elif status == 'Cashed Out':
             pl = winnings; total_pl += pl; total_wagered += wager
+        elif status == 'Void':
+            pl = 0.0
         else:
             pl = None
             open_count += 1

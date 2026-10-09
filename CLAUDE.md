@@ -191,6 +191,8 @@ A styled HTML report correlating sportsbook bets with NRFI outcomes, deployed to
 - **Sections**: Grade A NRFI bets, Other grade NRFI bets, and YRFI bets (Over 0.5 market), each with subtotal; summary bar shows separate stats for each section
 - **YRFI bets**: Filtered by `'Over 0.5' in Market`; result colors are flipped (green = run scored = win)
 - **Date matching**: Exact match first; for SETTLED bets only, check ±1 day (handles UTC offset); OPEN bets never use fuzzy matching (shows "Pending" if no exact match)
+- **Latest fixes**: Handles sportsbook rows with `Price = 1.00` / `EVEN` odds without crashing; treats `Status = Void` as a zero-P&L, no-op bet instead of a failed conversion; report reruns successfully and redeploys to S3
+- **Recent deployment note**: Current script version is stable for the latest export format and has been successfully redeployed to the live `bbr` page
 
 ## Deploy Command
 ```bash
